@@ -1,6 +1,6 @@
 # WalaPaNameHehe
 
-Co-op first-person dinosaur expedition prototype built in Unity. Players explore, collect samples, and coordinate extraction while avoiding hostile AI. The project includes inventory + loadout flow, drone support equipment, ragdoll/downed states, and a networked expedition state machine.
+Co-op first-person dinosaur expedition prototype built in Unity. Players explore, collect samples, and coordinate extraction while avoiding hostile dinos. Includes inventory/quick-slot flow, drone support equipment, ragdoll + downed/revive states, and a networked expedition state machine.
 
 ## Unity Version
 - `6000.3.6f1` (Unity 6.3.6f1)
@@ -32,9 +32,9 @@ Notes:
 
 ## Core Gameplay Loop
 1. Start expedition (networked via `GameManager`).
-2. Collect samples using the extractor item.
+2. Collect samples using the extractor tool.
 3. Call extraction once the required sample count is met.
-4. Survive until extraction completes.
+4. Hold out until extraction completes.
 
 ## Project Structure
 - `Assets/Scenes`  
@@ -61,9 +61,9 @@ Notes:
 - Drone equipment: `Assets/Scripts/WeaponDrone.cs`
 - AI behavior: `Assets/Scripts/AI Behaviors/DinoAi.cs` and rule sets
 
-## AI Behaviors (Tracking)
+## AI Behaviors
 - `Assets/Scripts/AI Behaviors/DinoAi.cs`  
-  Core state machine (Idle, Roam, Chase, Investigate, Attack, etc.), perception, NavMesh movement, and animator driving.
+  Core AI state machine (Idle/Roam/Investigate/Chase/Attack/etc.), perception, NavMesh movement, and animator driving.
 - `Assets/Scripts/AI Behaviors/DinoAttackController.cs`  
   Attack execution (instakill, down state, or grab hold) with cooldowns and bite-point handling.
 - `Assets/Scripts/AI Behaviors/WorldSoundStimulus.cs`  
@@ -86,7 +86,7 @@ Notes:
   - `Assets/Scripts/AI Behaviors/Editor/DinoAIEditor.cs`
   - `Assets/Scripts/AI Behaviors/Editor/DinoHitboxSetupTool.cs`
 
-## Items (Tracking)
+## Items
 - **Adrenaline Shot** (`Assets/Scripts/Special Items/AdrenalineShotItem.cs`)  
   Temporary speed boost for the local player. Applies a multiplier for a short duration, then consumes the selected item.
 - **Lucky Charm** (`Assets/Scripts/Special Items/LuckyCharmItem.cs`)  
@@ -96,7 +96,7 @@ Notes:
 - **Drone Spawner** (`Assets/Scripts/WeaponDrone.cs`)  
   Summons a controllable weapon drone. Handles drone lifetime, movement, and projectile firing. Consumes spawner uses.
 
-## Items Matrix (Tracking)
+## Items Matrix
 Item | Purpose | Duration/Cooldown | Consumes
 --- | --- | --- | --- | ---
 Adrenaline Shot | Temporary speed boost | Hold-to-use: `holdToUseSeconds`, effect: `effectDurationSeconds` | Yes (consumes selected item)
@@ -104,7 +104,7 @@ Lucky Charm | Bonus prefab payload | N/A | Depends on prefab behavior
 Extractor Tool | Sample extraction | Extract time: `extractDuration` | No (tool), rewards items
 Drone Spawner | Weapon drone summon/use | Lifetime: `droneLifetime`, fire cooldown: `fireCooldown` | Yes (uses per spawner item)
 
-## AI Behavior Matrix (Tracking)
+## AI Behavior Matrix
 Aggression Type | Detect Delay | Chase Duration | Sound Reaction | Special Notes
 --- | --- | --- | --- | ---
 Passive | None | None | No | Roams only; never chases
@@ -114,49 +114,6 @@ Hunter | Staged cues | Commit after cues | Yes | Stalk/cue system, can flee/comm
 Plunderer | Timed spawn | Limited active window | No | Grab-and-carry flow, returns/drops
 
 Key timing/tuning fields live in `Assets/Scripts/AI Behaviors/DinoAi.cs`.
-
-## Change Guidelines (Read Before Editing)
-Use this quick checklist to keep behavior edits consistent and safe.
-
-1. Start With The State Machine
-- Enum lives in `Assets/Scripts/AI Behaviors/DinoAi.cs` (`DinoState`).
-- If you add/remove a state, update:
-- `Update()` switch
-- `ChangeState()`
-- Any state-specific guards (e.g., attack checks, alert roar, cleanup paths)
-
-1. Aggression Behavior Rules
-- Each aggression type is a rules file under `Assets/Scripts/AI Behaviors`.
-- Keep behavior logic inside the rule class (Passive/Neutral/Aggressive/Hunter/Plunderer).
-- If a new state is added, make sure the rule set handles it (or intentionally ignores it).
-
-1. Animation Consistency
-- Animator is driven by `State` int (`animatorStateParam`) in `DinoAi.cs`.
-- If you change states, confirm the animator graph has matching state names and transitions.
-- Attack visuals use `TriggerAttackVisual()` and `AttackTrigger`.
-
-1. Network Sync
-- AI runs on server. State sync uses `syncedState` in `DinoAi.cs`.
-- If you add a new state, ensure it’s valid for proxies and doesn’t break `ApplyProxyAnimatorFromSyncedState()`.
-
-1. Plunderer Rules
-- Plunderer uses only `Roam` and `Attack` for logic.
-- Spawn should start in `Roam`. Attack is used for its grab flow.
-
-1. Aggressive Rules
-- Aggressive dinos ignore `Stunned`/`WakeUp`.
-- Don’t trigger `Stun()` for `AggressionType.Aggressive` unless you want to re-enable that flow.
-
-1. Before You Commit
-- Play-test at least one of each aggression type.
-- Test at least one sound reaction scenario.
-- Validate attack/kill still fires at close range.
-- Verify AI still animates correctly on clients (proxy animation).
-
-## Known Issues / TODO
-- Add list of current known bugs, balance pain points, and polish tasks.
-- Track unresolved input conflicts (e.g., multiple systems bound to `E`) as they arise.
-- Add UI/UX polish tasks for prompts, crosshair, and loadout flow.
 
 ## Performance Notes
 - AI uses `NavMeshAgent`; avoid extreme agent counts without profiling.
@@ -186,7 +143,3 @@ The project contains third-party assets and demo scenes under:
 
 These folders include their own demo scenes and scripts. The primary project scripts live in `Assets/Scripts`.
 
-## Notes For Contributors
-- This repo is a Unity project; avoid editing files under `Library`, `Temp`, or `Logs`.
-- If adding new gameplay systems, prefer placing scripts under `Assets/Scripts` in a matching subfolder.
-- Keep new input bindings consistent with the existing `Keyboard.current`-based input flow.
