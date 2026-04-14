@@ -27,10 +27,12 @@ public class DinoAIEditor : Editor
     private SerializedProperty loseSightChaseTimeoutProp;
     private SerializedProperty reactionCooldownSecondsProp;
     private SerializedProperty roamerFleeSecondsProp;
-    private SerializedProperty hunterIsolationRadiusProp;
-    private SerializedProperty hunterHuntChanceProp;
-    private SerializedProperty hunterFleeSecondsProp;
-    private SerializedProperty hunterSpawnPointProp;
+    private SerializedProperty hunterCueDelayMinProp;
+    private SerializedProperty hunterCueDelayMaxProp;
+    private SerializedProperty hunterCueCountMinProp;
+    private SerializedProperty hunterCueCountMaxProp;
+    private SerializedProperty hunterForceHuntTestProp;
+    private SerializedProperty hunterForceHuntPlayCuesProp;
     private SerializedProperty plundererBaseGrabChanceDayProp;
     private SerializedProperty plundererBaseGrabChanceNightProp;
     private SerializedProperty plundererHuntedBonusProp;
@@ -80,10 +82,12 @@ public class DinoAIEditor : Editor
         loseSightChaseTimeoutProp = serializedObject.FindProperty("loseSightChaseTimeout");
         reactionCooldownSecondsProp = serializedObject.FindProperty("reactionCooldownSeconds");
         roamerFleeSecondsProp = serializedObject.FindProperty("roamerFleeSeconds");
-        hunterIsolationRadiusProp = serializedObject.FindProperty("hunterIsolationRadius");
-        hunterHuntChanceProp = serializedObject.FindProperty("hunterHuntChance");
-        hunterFleeSecondsProp = serializedObject.FindProperty("hunterFleeSeconds");
-        hunterSpawnPointProp = serializedObject.FindProperty("hunterSpawnPoint");
+        hunterCueDelayMinProp = serializedObject.FindProperty("hunterCueDelayMin");
+        hunterCueDelayMaxProp = serializedObject.FindProperty("hunterCueDelayMax");
+        hunterCueCountMinProp = serializedObject.FindProperty("hunterCueCountMin");
+        hunterCueCountMaxProp = serializedObject.FindProperty("hunterCueCountMax");
+        hunterForceHuntTestProp = serializedObject.FindProperty("hunterForceHuntTest");
+        hunterForceHuntPlayCuesProp = serializedObject.FindProperty("hunterForceHuntPlayCues");
         plundererBaseGrabChanceDayProp = serializedObject.FindProperty("plundererBaseGrabChanceDay");
         plundererBaseGrabChanceNightProp = serializedObject.FindProperty("plundererBaseGrabChanceNight");
         plundererHuntedBonusProp = serializedObject.FindProperty("plundererHuntedBonus");
@@ -198,9 +202,20 @@ public class DinoAIEditor : Editor
         }
         if (isHunter)
         {
-            EditorGUILayout.PropertyField(hunterIsolationRadiusProp);
-            EditorGUILayout.PropertyField(hunterFleeSecondsProp);
-            EditorGUILayout.PropertyField(hunterSpawnPointProp, new GUIContent("Hunter Spawn Point"));
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("Hunter Cues", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(hunterCueDelayMinProp, new GUIContent("HunterCueDelayMin"));
+            EditorGUILayout.PropertyField(hunterCueDelayMaxProp, new GUIContent("HunterCueDelayMax"));
+            EditorGUILayout.PropertyField(hunterCueCountMinProp, new GUIContent("HunterCueCountMin"));
+            EditorGUILayout.PropertyField(hunterCueCountMaxProp, new GUIContent("HunterCueCountMax"));
+
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("Hunter Test", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(hunterForceHuntTestProp, new GUIContent("Force Hunt Test"));
+            if (hunterForceHuntTestProp.boolValue)
+            {
+                EditorGUILayout.PropertyField(hunterForceHuntPlayCuesProp, new GUIContent("Play Test Cues"));
+            }
         }
         if (isPlunderer)
         {

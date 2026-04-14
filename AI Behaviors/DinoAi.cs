@@ -50,11 +50,12 @@ public class DinoAI : NetworkBehaviour
     [Min(0.1f)] public float roamerFleeSeconds = 15f;
     public float neutralReactDelayMin = 2f;
     public float neutralReactDelayMax = 4f;
-    public float hunterStalkCommitSeconds = 5f;
-    public float hunterIsolationRadius = 0f;
-    [Range(0f, 1f)] public float hunterHuntChance = 0.2f;
-    [Min(0.25f)] public float hunterFleeSeconds = 4f;
-    public Transform hunterSpawnPoint;
+    [Min(0.1f)] public float hunterCueDelayMin = 40f;
+    [Min(0.1f)] public float hunterCueDelayMax = 60f;
+    [Min(1)] public int hunterCueCountMin = 5;
+    [Min(1)] public int hunterCueCountMax = 5;
+    public bool hunterForceHuntTest = false;
+    public bool hunterForceHuntPlayCues = true;
     public float idleTime = 5f;
 
     [Header("Plunderer")]
@@ -211,7 +212,6 @@ public class DinoAI : NetworkBehaviour
     }
 
     public float DetectionRadiusSqr => detectionRadius * detectionRadius;
-    public float HunterIsolationRadius => hunterIsolationRadius > 0f ? hunterIsolationRadius : detectionRadius * 0.6f;
     public LayerMask PlayerLayersMask => playerLayers;
     public NavMeshAgent Agent => agent;
     public Transform CurrentTarget => targetPlayer;
@@ -259,11 +259,6 @@ public class DinoAI : NetworkBehaviour
         {
             homePosition = plundererSpawnPoint.position;
             transform.position = homePosition;
-        }
-        else if (aggressionType == AggressionType.Hunter && hunterSpawnPoint != null)
-        {
-            homePosition = hunterSpawnPoint.position;
-            transform.SetPositionAndRotation(hunterSpawnPoint.position, hunterSpawnPoint.rotation);
         }
         EnsureAggressionBehavior();
         EnsurePlayerLayerMask();
