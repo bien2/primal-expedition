@@ -82,6 +82,9 @@ namespace WalaPaNameHehe
         private int[] prefabRoundRobinIndex;
         private GameObject spawnedPlunderer;
         private GameObject spawnedHunter;
+        private Vector3 hunterSpawnPosition;
+        private Quaternion hunterSpawnRotation;
+        private bool hasHunterSpawnLocation;
         private Coroutine plundererLoop;
         private float nextPlundererSpawnTime;
         private int trackedApexDay = -1;
@@ -422,6 +425,55 @@ namespace WalaPaNameHehe
             }
 
             spawnedHunter = instance;
+            hunterSpawnPosition = position;
+            hunterSpawnRotation = rotation;
+            hasHunterSpawnLocation = true;
+        }
+
+        public bool TryGetHunterSpawnLocation(GameObject hunter, out Vector3 position, out Quaternion rotation)
+        {
+            position = default;
+            rotation = default;
+
+            if (!hasHunterSpawnLocation || spawnedHunter == null || hunter == null)
+            {
+                return false;
+            }
+
+            if (spawnedHunter != hunter)
+            {
+                return false;
+            }
+
+            position = hunterSpawnPosition;
+            rotation = hunterSpawnRotation;
+            return true;
+        }
+
+        public void DespawnHunter(GameObject hunter)
+        {
+            if (hunter == null)
+            {
+                return;
+            }
+
+            if (spawnedHunter != null && spawnedHunter != hunter)
+            {
+                return;
+            }
+
+            NetworkObject netObj = hunter.GetComponent<NetworkObject>();
+            if (IsServerActive() && netObj != null && netObj.IsSpawned)
+            {
+                netObj.Despawn(true);
+            }
+            else
+            {
+                Destroy(hunter);
+            }
+
+            spawnedHunter = null;
+            hasHunterSpawnLocation = false;
         }
 
         private Transform GetHunterSpawnPoint()

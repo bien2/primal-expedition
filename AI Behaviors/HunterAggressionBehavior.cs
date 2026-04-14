@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.AI;
-using Unity.Netcode;
 using WalaPaNameHehe;
 using WalaPaNameHehe.Multiplayer;
 using System.Collections.Generic;
@@ -9,36 +8,27 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
 {
     private static bool huntOccurredThisSession = false;
     private static int huntOwnerInstanceId = 0;
-    private static readonly HashSet<int> despawnedHunters = new HashSet<int>();
     private static readonly List<Transform> EmptyPlayers = new List<Transform>(0);
+    private static DinoSpawnerManager cachedSpawner;
     private const float HunterChaseDelayMin = 60f;
     private const float HunterChaseDelayMax = 85f;
     private const float HunterIsolationChaseDelay = 5f;
-    private const float HunterTargetCueDelayMin = 1.5f;
-    private const float HunterTargetCueDelayMax = 4f;
-    private const float HunterTargetCueIntervalMin = 20f;
-    private const float HunterTargetCueIntervalMax = 40f;
-    private const float HunterCueStartDelayMin = 30f;
-    private const float HunterCueStartDelayMax = 40f;
-    private const int HunterCueCountMin = 3;
-    private const int HunterCueCountMax = 5;
     private const int HunterMinimumCueCountBeforeChase = 3;
-    private const int HunterCueCountMaxFixed = 5;
     private const float HunterThirdCueCommitChance = 0.4f;
     private const float HunterFourthCueCommitChance = 0.5f;
     private const float RepathDistanceThreshold = 3f;
     private const float FleeProbeDistance = 14f;
     private const float FakeHuntRecoverySeconds = 4f;
     private const int RecoverySampleCount = 10;
+    private const float ForceHuntSelectDelaySeconds = 10f;
+    private const float ForceHuntCueIntervalSeconds = 10f;
+    private const int ForceHuntCueCount = 2;
 
     private readonly Dictionary<int, Vector3> lastChaseDestinationByAi = new Dictionary<int, Vector3>();
     private readonly Dictionary<int, Transform> pendingTargetByAi = new Dictionary<int, Transform>();
-    private readonly Dictionary<int, float> targetAcquiredTimeByAi = new Dictionary<int, float>();
     private readonly Dictionary<int, float> chaseReadyTimeByAi = new Dictionary<int, float>();
-    private readonly Dictionary<int, float> targetCueDelayByAi = new Dictionary<int, float>();
     private readonly Dictionary<int, float> nextTargetCueTimeByAi = new Dictionary<int, float>();
     private readonly Dictionary<int, int> targetCueCountByAi = new Dictionary<int, int>();
-    private readonly Dictionary<int, float> cueStartTimeByAi = new Dictionary<int, float>();
     private readonly Dictionary<int, int> cueMaxByAi = new Dictionary<int, int>();
     private readonly HashSet<int> roarPlayedByAi = new HashSet<int>();
     private readonly Dictionary<int, bool> encounterWillHuntByAi = new Dictionary<int, bool>();
@@ -47,13 +37,62 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
     private readonly Dictionary<int, float> fakeHuntRecoveryUntilByAi = new Dictionary<int, float>();
     private readonly Dictionary<int, Vector3> fakeHuntRecoveryDestinationByAi = new Dictionary<int, Vector3>();
     private static readonly Dictionary<int, Vector3> returnToSpawnByAi = new Dictionary<int, Vector3>();
+    private static readonly Dictionary<int, float> returnToSpawnUntilTimeByAi = new Dictionary<int, float>();
+    private readonly Dictionary<int, float> forceHuntStartTimeByAi = new Dictionary<int, float>();
+    private readonly Dictionary<int, Transform> forceHuntTargetByAi = new Dictionary<int, Transform>();
+    private readonly Dictionary<int, int> forceHuntCuesPlayedByAi = new Dictionary<int, int>();
+    private readonly Dictionary<int, float> forceHuntNextCueTimeByAi = new Dictionary<int, float>();
 
     public static void ResetSessionState()
     {
         huntOccurredThisSession = false;
         huntOwnerInstanceId = 0;
-        despawnedHunters.Clear();
         returnToSpawnByAi.Clear();
+        returnToSpawnUntilTimeByAi.Clear();
+    }
+
+    private static DinoSpawnerManager GetSpawner()
+    {
+        if (cachedSpawner != null)
+        {
+            return cachedSpawner;
+        }
+
+        cachedSpawner = Object.FindFirstObjectByType<DinoSpawnerManager>(FindObjectsInactive.Exclude);
+        return cachedSpawner;
+    }
+
+    private static bool TryGetHunterSpawnLocation(DinoAI ai, out Vector3 position)
+    {
+        position = default;
+        if (ai == null)
+        {
+            return false;
+        }
+
+        DinoSpawnerManager spawner = GetSpawner();
+        if (spawner == null)
+        {
+            return false;
+        }
+
+        return spawner.TryGetHunterSpawnLocation(ai.gameObject, out position, out _);
+    }
+
+    private static void RequestDespawnHunter(DinoAI ai)
+    {
+        if (ai == null)
+        {
+            return;
+        }
+
+        DinoSpawnerManager spawner = GetSpawner();
+        if (spawner == null)
+        {
+            return;
+        }
+
+        spawner.DespawnHunter(ai.gameObject);
     }
 
     public static void NotifyHunterKill(DinoAI ai)
@@ -63,21 +102,27 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return;
         }
 
-        if (ai.hunterSpawnPoint == null)
+        if (!TryGetHunterSpawnLocation(ai, out Vector3 spawnPosition))
         {
-            DespawnHunter(ai);
+            RequestDespawnHunter(ai);
             return;
         }
 
         ai.StopChase();
         ai.SetHunterHiddenMode(false);
         ai.ChangeState(DinoAI.DinoState.Roam);
-        returnToSpawnByAi[ai.GetInstanceID()] = ai.hunterSpawnPoint.position;
+        returnToSpawnByAi[ai.GetInstanceID()] = spawnPosition;
+        returnToSpawnUntilTimeByAi[ai.GetInstanceID()] = Time.time + Mathf.Max(0.25f, ai.roamerFleeSeconds);
     }
 
     public void HandleIdle(DinoAI ai)
     {
         if (TryHandleReturnToSpawn(ai))
+        {
+            return;
+        }
+
+        if (TryHandleForceHuntTest(ai))
         {
             return;
         }
@@ -112,6 +157,11 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return;
         }
 
+        if (TryHandleForceHuntTest(ai))
+        {
+            return;
+        }
+
         if (HandleNonOwnerAfterHuntStart(ai))
         {
             return;
@@ -142,6 +192,11 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return;
         }
 
+        if (TryHandleForceHuntTest(ai))
+        {
+            return;
+        }
+
         if (HandleNonOwnerAfterHuntStart(ai))
         {
             return;
@@ -154,6 +209,11 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
     public void HandleChase(DinoAI ai)
     {
         if (TryHandleReturnToSpawn(ai))
+        {
+            return;
+        }
+
+        if (TryHandleForceHuntTest(ai))
         {
             return;
         }
@@ -253,11 +313,10 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             {
                 MarkHuntStarted(ai);
                 pendingTargetByAi[key] = target;
-                targetAcquiredTimeByAi[key] = Time.time;
                 chaseReadyTimeByAi.Remove(key);
-                targetCueDelayByAi[key] = GetRandomCueDelay();
-                nextTargetCueTimeByAi.Remove(key);
+                nextTargetCueTimeByAi[key] = Time.time + GetRandomCueDelay(ai);
                 targetCueCountByAi[key] = 0;
+                cueMaxByAi.Remove(key);
                 roarPlayedByAi.Remove(key);
                 fleeUntilByAi.Remove(key);
                 committedToChaseByAi[key] = false;
@@ -265,22 +324,132 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             else
             {
                 pendingTargetByAi.Remove(key);
-                targetAcquiredTimeByAi.Remove(key);
                 chaseReadyTimeByAi.Remove(key);
-                targetCueDelayByAi.Remove(key);
                 nextTargetCueTimeByAi.Remove(key);
                 targetCueCountByAi.Remove(key);
-                cueStartTimeByAi.Remove(key);
                 cueMaxByAi.Remove(key);
                 roarPlayedByAi.Remove(key);
                 committedToChaseByAi.Remove(key);
-                fleeUntilByAi[key] = Time.time + Mathf.Max(0.25f, ai.hunterFleeSeconds);
+                fleeUntilByAi[key] = Time.time + Mathf.Max(0.25f, ai.roamerFleeSeconds);
             }
         }
 
         ai.SetHunterHiddenMode(false);
         ai.StartChase(target, false);
         return true;
+    }
+
+    private bool TryHandleForceHuntTest(DinoAI ai)
+    {
+        if (ai == null || !ai.IsServer || !ai.hunterForceHuntTest)
+        {
+            return false;
+        }
+
+        int key = ai.GetInstanceID();
+        if (!forceHuntStartTimeByAi.TryGetValue(key, out float startTime))
+        {
+            startTime = Time.time;
+            forceHuntStartTimeByAi[key] = startTime;
+        }
+
+        if (!forceHuntTargetByAi.TryGetValue(key, out Transform target) || target == null)
+        {
+            ai.SetHunterHiddenMode(true);
+            ai.StopChase();
+
+            if (Time.time < startTime + ForceHuntSelectDelaySeconds)
+            {
+                return true;
+            }
+
+            if (!TryPickRandomAlivePlayer(out Transform picked))
+            {
+                return true;
+            }
+
+            forceHuntTargetByAi[key] = picked;
+            forceHuntCuesPlayedByAi[key] = 0;
+            forceHuntNextCueTimeByAi[key] = Time.time;
+            committedToChaseByAi[key] = false;
+            targetCueCountByAi[key] = 0;
+            cueMaxByAi[key] = ForceHuntCueCount;
+            nextTargetCueTimeByAi.Remove(key);
+            pendingTargetByAi[key] = picked;
+            ai.ChangeState(DinoAI.DinoState.Roam);
+            return true;
+        }
+
+        if (!IsTargetValid(target))
+        {
+            ClearCachedDestination(ai);
+            ai.StopChase();
+            return true;
+        }
+
+        if (!ai.hunterForceHuntPlayCues)
+        {
+            MarkHuntStarted(ai);
+            committedToChaseByAi[key] = true;
+            ai.SetHunterHiddenMode(false);
+            ai.StartChase(target, false);
+            return true;
+        }
+
+        if (!forceHuntNextCueTimeByAi.TryGetValue(key, out float nextCueTime))
+        {
+            nextCueTime = Time.time;
+            forceHuntNextCueTimeByAi[key] = nextCueTime;
+        }
+
+        if (Time.time < nextCueTime)
+        {
+            ai.SetHunterHiddenMode(true);
+            ai.StopChase();
+            return true;
+        }
+
+        int cuesPlayed = 0;
+        forceHuntCuesPlayedByAi.TryGetValue(key, out cuesPlayed);
+        if (cuesPlayed < ForceHuntCueCount)
+        {
+            TryPlayTargetCue(ai, target, true);
+            cuesPlayed += 1;
+            forceHuntCuesPlayedByAi[key] = cuesPlayed;
+            forceHuntNextCueTimeByAi[key] = Time.time + ForceHuntCueIntervalSeconds;
+            return true;
+        }
+
+        MarkHuntStarted(ai);
+        committedToChaseByAi[key] = true;
+        ai.SetHunterHiddenMode(false);
+        ai.StartChase(target, false);
+        return true;
+    }
+
+    private static bool TryPickRandomAlivePlayer(out Transform target)
+    {
+        target = null;
+        WalaPaNameHehe.PlayerMovement[] players = Object.FindObjectsByType<WalaPaNameHehe.PlayerMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        if (players == null || players.Length == 0)
+        {
+            return false;
+        }
+
+        int startIndex = Random.Range(0, players.Length);
+        for (int i = 0; i < players.Length; i++)
+        {
+            WalaPaNameHehe.PlayerMovement p = players[(startIndex + i) % players.Length];
+            if (p == null || p.IsDead)
+            {
+                continue;
+            }
+
+            target = p.transform;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsTargetValid(Transform target)
@@ -426,18 +595,15 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
 
         lastChaseDestinationByAi.Remove(key);
         pendingTargetByAi.Remove(key);
-        targetAcquiredTimeByAi.Remove(key);
         chaseReadyTimeByAi.Remove(key);
-        targetCueDelayByAi.Remove(key);
         nextTargetCueTimeByAi.Remove(key);
         targetCueCountByAi.Remove(key);
-        cueStartTimeByAi.Remove(key);
         cueMaxByAi.Remove(key);
         roarPlayedByAi.Remove(key);
         encounterWillHuntByAi.Remove(key);
         fleeUntilByAi.Remove(key);
 
-        fakeHuntRecoveryUntilByAi[key] = Time.time + Mathf.Max(FakeHuntRecoverySeconds, ai.hunterFleeSeconds);
+        fakeHuntRecoveryUntilByAi[key] = Time.time + Mathf.Max(FakeHuntRecoverySeconds, ai.roamerFleeSeconds);
         fakeHuntRecoveryDestinationByAi[key] = recoveryDestination;
 
         ai.StopChase();
@@ -602,31 +768,11 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         }
 
         int key = ai.GetInstanceID();
-        if (!targetAcquiredTimeByAi.TryGetValue(key, out float targetAcquiredTime))
+        if (!nextTargetCueTimeByAi.TryGetValue(key, out float nextAllowedTime))
         {
-            targetAcquiredTime = Time.time;
-            targetAcquiredTimeByAi[key] = targetAcquiredTime;
+            nextAllowedTime = Time.time + GetRandomCueDelay(ai);
+            nextTargetCueTimeByAi[key] = nextAllowedTime;
         }
-
-        if (!targetCueDelayByAi.TryGetValue(key, out float cueDelay))
-        {
-            cueDelay = GetRandomCueDelay();
-            targetCueDelayByAi[key] = cueDelay;
-        }
-
-        float earliestCueTime = targetAcquiredTime + cueDelay;
-        if (cueStartTimeByAi.TryGetValue(key, out float cueStartTime))
-        {
-            earliestCueTime = Mathf.Max(earliestCueTime, cueStartTime);
-        }
-
-        if (!forcePlay && Time.time < earliestCueTime)
-        {
-            return;
-        }
-
-        float nextAllowedTime = 0f;
-        nextTargetCueTimeByAi.TryGetValue(key, out nextAllowedTime);
 
         if (!forcePlay && Time.time < nextAllowedTime)
         {
@@ -646,22 +792,26 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
 
         int cueCount = 0;
         targetCueCountByAi.TryGetValue(key, out cueCount);
-        int cueMax = HunterCueCountMaxFixed;
-        cueMaxByAi.TryGetValue(key, out cueMax);
+        int cueMaxFallback = ai != null ? Mathf.Max(1, ai.hunterCueCountMax) : 5;
+        if (!cueMaxByAi.TryGetValue(key, out int cueMax) || cueMax <= 0)
+        {
+            cueMax = cueMaxFallback;
+        }
         if (cueCount >= cueMax)
         {
             return;
         }
 
         playerMovement.TriggerHunterTargetSound();
-        nextTargetCueTimeByAi[key] = Time.time + GetRandomCueInterval();
+        nextTargetCueTimeByAi[key] = Time.time + GetRandomCueDelay(ai);
         cueCount += 1;
         targetCueCountByAi[key] = cueCount;
 
-        if (cueCount >= HunterMinimumCueCountBeforeChase)
+        int minimumCueCountBeforeChase = Mathf.Min(HunterMinimumCueCountBeforeChase, cueMax);
+        if (cueCount >= minimumCueCountBeforeChase)
         {
             bool shouldCommit = false;
-            if (cueCount >= HunterCueCountMaxFixed)
+            if (cueCount >= cueMax)
             {
                 shouldCommit = true;
             }
@@ -721,21 +871,14 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             ai.Agent.ResetPath();
         }
 
-        if (!cueStartTimeByAi.ContainsKey(key))
+        if (!cueMaxByAi.ContainsKey(key))
         {
-            cueStartTimeByAi[key] = Time.time + GetRandomCueStartDelay();
-            cueMaxByAi[key] = HunterCueCountMaxFixed;
+            cueMaxByAi[key] = GetRandomCueCount(ai);
         }
 
-        if (!targetAcquiredTimeByAi.TryGetValue(key, out float acquiredTime))
+        if (!nextTargetCueTimeByAi.ContainsKey(key))
         {
-            acquiredTime = Time.time;
-            targetAcquiredTimeByAi[key] = acquiredTime;
-        }
-
-        if (!cueStartTimeByAi.TryGetValue(key, out float cueStartTime) || Time.time < cueStartTime)
-        {
-            return true;
+            nextTargetCueTimeByAi[key] = Time.time + GetRandomCueDelay(ai);
         }
 
         TryPlayTargetCue(ai, target);
@@ -780,10 +923,8 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         ai.SetHunterHiddenMode(false);
         pendingTargetByAi.Remove(key);
         chaseReadyTimeByAi.Remove(key);
-        targetCueDelayByAi.Remove(key);
         nextTargetCueTimeByAi.Remove(key);
         targetCueCountByAi.Remove(key);
-        cueStartTimeByAi.Remove(key);
         cueMaxByAi.Remove(key);
         roarPlayedByAi.Remove(key);
         committedToChaseByAi.Remove(key);
@@ -820,11 +961,20 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return false;
         }
 
+        if (returnToSpawnUntilTimeByAi.TryGetValue(key, out float untilTime) && Time.time >= untilTime)
+        {
+            returnToSpawnByAi.Remove(key);
+            returnToSpawnUntilTimeByAi.Remove(key);
+            RequestDespawnHunter(ai);
+            return true;
+        }
+
         if (ai.Agent == null || !ai.Agent.isOnNavMesh)
         {
             ai.transform.position = destination;
             returnToSpawnByAi.Remove(key);
-            DespawnHunter(ai);
+            returnToSpawnUntilTimeByAi.Remove(key);
+            RequestDespawnHunter(ai);
             return true;
         }
 
@@ -832,11 +982,26 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         ai.Agent.speed = Mathf.Max(0f, ai.runSpeed);
         ai.Agent.SetDestination(destination);
 
-        float arriveDistance = Mathf.Max(ai.Agent.stoppingDistance, 1.2f);
-        if (!ai.Agent.pathPending && ai.Agent.remainingDistance <= arriveDistance)
+        if (!ai.Agent.pathPending)
         {
-            returnToSpawnByAi.Remove(key);
-            DespawnHunter(ai);
+            float arriveDistance = Mathf.Max(ai.Agent.stoppingDistance, 0.5f);
+            if (ai.Agent.hasPath && ai.Agent.remainingDistance <= arriveDistance)
+            {
+                returnToSpawnByAi.Remove(key);
+                returnToSpawnUntilTimeByAi.Remove(key);
+                RequestDespawnHunter(ai);
+            }
+            else if (!ai.Agent.hasPath)
+            {
+                Vector3 delta = ai.transform.position - destination;
+                delta.y = 0f;
+                if (delta.sqrMagnitude <= (arriveDistance * arriveDistance))
+                {
+                    returnToSpawnByAi.Remove(key);
+                    returnToSpawnUntilTimeByAi.Remove(key);
+                    RequestDespawnHunter(ai);
+                }
+            }
         }
 
         return true;
@@ -849,13 +1014,14 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return;
         }
 
-        if (ai.hunterSpawnPoint == null)
+        if (!TryGetHunterSpawnLocation(ai, out Vector3 spawnPosition))
         {
-            DespawnHunter(ai);
+            RequestDespawnHunter(ai);
             return;
         }
 
-        returnToSpawnByAi[ai.GetInstanceID()] = ai.hunterSpawnPoint.position;
+        returnToSpawnByAi[ai.GetInstanceID()] = spawnPosition;
+        returnToSpawnUntilTimeByAi[ai.GetInstanceID()] = Time.time + Mathf.Max(0.25f, ai.roamerFleeSeconds);
     }
 
     private Vector3 GetLastChaseDestination(DinoAI ai)
@@ -894,12 +1060,9 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         ai.SetHunterHiddenMode(false);
         lastChaseDestinationByAi.Remove(key);
         pendingTargetByAi.Remove(key);
-        targetAcquiredTimeByAi.Remove(key);
         chaseReadyTimeByAi.Remove(key);
-        targetCueDelayByAi.Remove(key);
         nextTargetCueTimeByAi.Remove(key);
         targetCueCountByAi.Remove(key);
-        cueStartTimeByAi.Remove(key);
         cueMaxByAi.Remove(key);
         roarPlayedByAi.Remove(key);
         encounterWillHuntByAi.Remove(key);
@@ -907,6 +1070,10 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         fleeUntilByAi.Remove(key);
         fakeHuntRecoveryUntilByAi.Remove(key);
         fakeHuntRecoveryDestinationByAi.Remove(key);
+        forceHuntStartTimeByAi.Remove(key);
+        forceHuntTargetByAi.Remove(key);
+        forceHuntCuesPlayedByAi.Remove(key);
+        forceHuntNextCueTimeByAi.Remove(key);
     }
 
     private static float GetRandomChaseDelay()
@@ -916,30 +1083,17 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         return Random.Range(min, max);
     }
 
-    private static float GetRandomCueInterval()
+    private static float GetRandomCueDelay(DinoAI ai)
     {
-        float min = Mathf.Max(0.1f, HunterTargetCueIntervalMin);
-        float max = Mathf.Max(min, HunterTargetCueIntervalMax);
+        float min = ai != null ? Mathf.Max(0.1f, ai.hunterCueDelayMin) : 40f;
+        float max = ai != null ? Mathf.Max(min, ai.hunterCueDelayMax) : 60f;
         return Random.Range(min, max);
     }
 
-    private static float GetRandomCueDelay()
+    private static int GetRandomCueCount(DinoAI ai)
     {
-        float min = Mathf.Max(0f, HunterTargetCueDelayMin);
-        float max = Mathf.Max(min, HunterTargetCueDelayMax);
-        return Random.Range(min, max);
-    }
-    private static float GetRandomCueStartDelay()
-    {
-        float min = Mathf.Max(0f, HunterCueStartDelayMin);
-        float max = Mathf.Max(min, HunterCueStartDelayMax);
-        return Random.Range(min, max);
-    }
-
-    private static int GetRandomCueCount()
-    {
-        int min = Mathf.Max(1, HunterCueCountMin);
-        int max = Mathf.Max(min, HunterCueCountMax);
+        int min = ai != null ? Mathf.Max(1, ai.hunterCueCountMin) : 5;
+        int max = ai != null ? Mathf.Max(min, ai.hunterCueCountMax) : 5;
         return Random.Range(min, max + 1);
     }
 
@@ -958,31 +1112,6 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         return huntOwnerInstanceId == ai.GetInstanceID();
     }
 
-    private static void DespawnHunter(DinoAI ai)
-    {
-        if (ai == null || !ai.IsServer)
-        {
-            return;
-        }
-
-        int key = ai.GetInstanceID();
-        if (!despawnedHunters.Add(key))
-        {
-            return;
-        }
-
-        returnToSpawnByAi.Remove(key);
-
-        NetworkObject networkObject = ai.GetComponent<NetworkObject>();
-        if (networkObject != null && networkObject.IsSpawned)
-        {
-            networkObject.Despawn(true);
-            return;
-        }
-
-        Object.Destroy(ai.gameObject);
-    }
-
     private static void MarkHuntStarted(DinoAI ai)
     {
         if (ai == null || !ai.IsServer)
@@ -995,17 +1124,6 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         {
             huntOwnerInstanceId = ai.GetInstanceID();
         }
-    }
-
-    private static void MarkHuntOccurred(DinoAI ai)
-    {
-        if (ai == null || !ai.IsServer)
-        {
-            return;
-        }
-
-        huntOccurredThisSession = true;
-        huntOwnerInstanceId = ai.GetInstanceID();
     }
 
     private bool HandleNonOwnerAfterHuntStart(DinoAI ai)
