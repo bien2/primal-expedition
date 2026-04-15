@@ -31,8 +31,6 @@ public class DinoAIEditor : Editor
     private SerializedProperty hunterCueDelayMaxProp;
     private SerializedProperty hunterCueCountMinProp;
     private SerializedProperty hunterCueCountMaxProp;
-    private SerializedProperty hunterForceHuntTestProp;
-    private SerializedProperty hunterForceHuntPlayCuesProp;
     private SerializedProperty plundererBaseGrabChanceDayProp;
     private SerializedProperty plundererBaseGrabChanceNightProp;
     private SerializedProperty plundererHuntedBonusProp;
@@ -86,8 +84,6 @@ public class DinoAIEditor : Editor
         hunterCueDelayMaxProp = serializedObject.FindProperty("hunterCueDelayMax");
         hunterCueCountMinProp = serializedObject.FindProperty("hunterCueCountMin");
         hunterCueCountMaxProp = serializedObject.FindProperty("hunterCueCountMax");
-        hunterForceHuntTestProp = serializedObject.FindProperty("hunterForceHuntTest");
-        hunterForceHuntPlayCuesProp = serializedObject.FindProperty("hunterForceHuntPlayCues");
         plundererBaseGrabChanceDayProp = serializedObject.FindProperty("plundererBaseGrabChanceDay");
         plundererBaseGrabChanceNightProp = serializedObject.FindProperty("plundererBaseGrabChanceNight");
         plundererHuntedBonusProp = serializedObject.FindProperty("plundererHuntedBonus");
@@ -208,14 +204,6 @@ public class DinoAIEditor : Editor
             EditorGUILayout.PropertyField(hunterCueDelayMaxProp, new GUIContent("HunterCueDelayMax"));
             EditorGUILayout.PropertyField(hunterCueCountMinProp, new GUIContent("HunterCueCountMin"));
             EditorGUILayout.PropertyField(hunterCueCountMaxProp, new GUIContent("HunterCueCountMax"));
-
-            EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("Hunter Test", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(hunterForceHuntTestProp, new GUIContent("Force Hunt Test"));
-            if (hunterForceHuntTestProp.boolValue)
-            {
-                EditorGUILayout.PropertyField(hunterForceHuntPlayCuesProp, new GUIContent("Play Test Cues"));
-            }
         }
         if (isPlunderer)
         {

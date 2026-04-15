@@ -54,8 +54,8 @@ public class DinoAI : NetworkBehaviour
     [Min(0.1f)] public float hunterCueDelayMax = 60f;
     [Min(1)] public int hunterCueCountMin = 5;
     [Min(1)] public int hunterCueCountMax = 5;
-    public bool hunterForceHuntTest = false;
-    public bool hunterForceHuntPlayCues = true;
+    [HideInInspector] public bool hunterForceHuntTest = false;
+    [HideInInspector] public bool hunterForceHuntPlayCues = true;
     public float idleTime = 5f;
 
     [Header("Plunderer")]

@@ -392,7 +392,17 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             MarkHuntStarted(ai);
             committedToChaseByAi[key] = true;
             ai.SetHunterHiddenMode(false);
+
+            pendingTargetByAi.Remove(key);
+            chaseReadyTimeByAi.Remove(key);
+            nextTargetCueTimeByAi.Remove(key);
+            targetCueCountByAi.Remove(key);
+            cueMaxByAi.Remove(key);
+            roarPlayedByAi.Remove(key);
+
             ai.StartChase(target, false);
+            ai.hunterForceHuntTest = false;
+
             return true;
         }
 
@@ -423,7 +433,16 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         MarkHuntStarted(ai);
         committedToChaseByAi[key] = true;
         ai.SetHunterHiddenMode(false);
+
+        pendingTargetByAi.Remove(key);
+        chaseReadyTimeByAi.Remove(key);
+        nextTargetCueTimeByAi.Remove(key);
+        targetCueCountByAi.Remove(key);
+        cueMaxByAi.Remove(key);
+        roarPlayedByAi.Remove(key);
+
         ai.StartChase(target, false);
+        ai.hunterForceHuntTest = false;
         return true;
     }
 
