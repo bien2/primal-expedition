@@ -61,6 +61,8 @@ namespace WalaPaNameHehe
         [Header("Hunter")]
         [SerializeField] private GameObject hunterPrefab;
         [SerializeField] private Transform[] hunterSpawnPoints;
+        [SerializeField] private bool hunterForceHuntTest;
+        [SerializeField] private bool hunterForceHuntPlayCues = true;
 
         [Header("Apex")]
         [SerializeField] private GameObject apexPrefab;
@@ -399,16 +401,44 @@ namespace WalaPaNameHehe
             }
 
             WalaPaNameHehe.Multiplayer.HunterMeterManager hunterManager = WalaPaNameHehe.Multiplayer.HunterMeterManager.Instance;
-            if (hunterManager != null && !hunterManager.ShouldHunterHuntThisRun)
+            if (!hunterForceHuntTest && hunterManager != null && !hunterManager.ShouldHunterHuntThisRun)
             {
                 return;
             }
 
             Transform spawnPoint = GetHunterSpawnPoint();
-            Vector3 position = spawnPoint != null ? spawnPoint.position : transform.position;
+            Vector3 position = GetSpawnPosition(spawnPoint);
             Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
 
             GameObject instance = Instantiate(hunterPrefab, position, rotation);
+            NavMeshAgent agent = instance.GetComponent<NavMeshAgent>();
+            if (agent != null && agent.enabled)
+            {
+                Vector3 agentPosition = instance.transform.position;
+                float radius = Mathf.Max(0.1f, navMeshSampleRadius);
+                if (!NavMesh.SamplePosition(agentPosition, out NavMeshHit hit, radius, NavMesh.AllAreas))
+                {
+                    float fallbackRadius = Mathf.Max(radius, 200f);
+                    if (fallbackRadius > radius && NavMesh.SamplePosition(agentPosition, out hit, fallbackRadius, NavMesh.AllAreas))
+                    {
+                        agent.Warp(hit.position);
+                    }
+                }
+                else
+                {
+                    agent.Warp(hit.position);
+                }
+            }
+            DinoAI ai = instance.GetComponent<DinoAI>();
+            if (ai != null)
+            {
+                ai.hunterForceHuntTest = hunterForceHuntTest;
+                ai.hunterForceHuntPlayCues = hunterForceHuntPlayCues;
+            }
+            else
+            {
+                Debug.LogWarning("DinoSpawnerManager: Hunter prefab missing DinoAI component. Force hunt test settings not applied.");
+            }
             if (IsServerActive())
             {
                 NetworkObject netObj = instance.GetComponent<NetworkObject>();
@@ -440,7 +470,7 @@ namespace WalaPaNameHehe
                 return false;
             }
 
-            if (spawnedHunter != hunter)
+            if (spawnedHunter == null)
             {
                 return false;
             }
