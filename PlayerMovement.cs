@@ -112,10 +112,6 @@ namespace WalaPaNameHehe
 
         [Header("Death")]
         [SerializeField] private float respawnDelaySeconds = 3f;
-        [SerializeField] private bool showRespawnOnGui = true;
-        [SerializeField] private string respawnButtonText = "Respawn";
-        [SerializeField] private Vector2 respawnButtonSize = new Vector2(220f, 60f);
-        [SerializeField] private bool allowRespawnHotkey = true;
         [SerializeField] private bool restoreCursorStateOnRespawn = true;
 
         [Header("Animation")]
@@ -332,10 +328,6 @@ namespace WalaPaNameHehe
                 StoreAndShowCursorForDeath();
                 moveInput = Vector2.zero;
                 isSprinting = false;
-                if (allowRespawnHotkey && Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame && CanRespawnNow())
-                {
-                    RequestRespawn();
-                }
                 return;
             }
             else
@@ -1073,47 +1065,6 @@ namespace WalaPaNameHehe
             // OnDrone animation is temporarily disabled.
         }
 
-        private void OnGUI()
-        {
-            if (!showRespawnOnGui)
-            {
-                return;
-            }
-
-            if (IsNetworkActive() && !IsOwner)
-            {
-                return;
-            }
-
-            if (!IsDead)
-            {
-                return;
-            }
-
-            float width = Mathf.Max(60f, respawnButtonSize.x);
-            float height = Mathf.Max(24f, respawnButtonSize.y);
-            Rect rect = new Rect(
-                (Screen.width - width) * 0.5f,
-                (Screen.height - height) * 0.6f,
-                width,
-                height);
-
-            float remaining = GetRespawnRemainingSeconds();
-            if (remaining > 0.01f)
-            {
-                GUI.Label(new Rect(rect.x, rect.y - 28f, width, 24f), $"Respawn in {Mathf.CeilToInt(remaining)}");
-            }
-
-            bool canRespawn = CanRespawnNow();
-            bool previousEnabled = GUI.enabled;
-            GUI.enabled = canRespawn;
-            if (GUI.Button(rect, string.IsNullOrWhiteSpace(respawnButtonText) ? "Respawn" : respawnButtonText))
-            {
-                RequestRespawn();
-            }
-            GUI.enabled = previousEnabled;
-        }
-
         public bool ServerKill()
         {
             if (IsNetworkActive())
@@ -1293,6 +1244,11 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (!IsRespawnAllowedNow())
+            {
+                return;
+            }
+
             if (respawnRoutine != null)
             {
                 StopCoroutine(respawnRoutine);
@@ -1339,6 +1295,11 @@ namespace WalaPaNameHehe
         private void StartRespawnOffline()
         {
             if (!isDeadOffline)
+            {
+                return;
+            }
+
+            if (!IsRespawnAllowedNow())
             {
                 return;
             }
@@ -1435,7 +1396,19 @@ namespace WalaPaNameHehe
 
         private bool CanRespawnNow()
         {
-            return GetRespawnRemainingSeconds() <= 0f;
+            return IsRespawnAllowedNow() && GetRespawnRemainingSeconds() <= 0f;
+        }
+
+        private bool IsRespawnAllowedNow()
+        {
+            WalaPaNameHehe.Multiplayer.GameManager gm = WalaPaNameHehe.Multiplayer.GameManager.Instance;
+            if (gm == null)
+            {
+                return true;
+            }
+
+            // During expeditions, deaths should be final (match dino instakill behavior).
+            return gm.CurrentState == WalaPaNameHehe.Multiplayer.GameManager.ExpeditionState.WaitingToStart;
         }
 
         private float GetRespawnRemainingSeconds()

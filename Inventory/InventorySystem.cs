@@ -258,6 +258,18 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (loadoutUiOpen)
+            {
+                CloseLoadoutUi();
+            }
+
+            lastLoadoutSelectionDay = -1;
+
+            if (IsServer && IsSpawned && NetworkManager != null && NetworkManager.IsListening)
+            {
+                ResetLoadoutSelectionClientRpc();
+            }
+
             int previousSlot = selectedSlot;
             selectedSlot = 0;
 
@@ -300,6 +312,16 @@ namespace WalaPaNameHehe
             if (IsServer)
             {
                 PushInventoryState();
+            }
+        }
+
+        [ClientRpc]
+        private void ResetLoadoutSelectionClientRpc()
+        {
+            lastLoadoutSelectionDay = -1;
+            if (loadoutUiOpen)
+            {
+                CloseLoadoutUi();
             }
         }
 

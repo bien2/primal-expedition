@@ -59,6 +59,7 @@ namespace WalaPaNameHehe.Multiplayer
         private readonly NetworkVariable<int> networkCurrentDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkRequiredSamples = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkCollectedSamples = new(writePerm: NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<int> networkNextRoamerSpawnDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<bool> networkIsExtractionAvailable = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<float> networkExtractionTimeRemaining = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<ExpeditionState> networkExpeditionState = new(writePerm: NetworkVariableWritePermission.Server);
@@ -66,6 +67,7 @@ namespace WalaPaNameHehe.Multiplayer
         private int localCurrentDay;
         private int localRequiredSamples;
         private int localCollectedSamples;
+        private int localNextRoamerSpawnDay;
         private bool localIsExtractionAvailable;
         private float localExtractionTimeRemaining;
         private ExpeditionState localExpeditionState;
@@ -77,6 +79,7 @@ namespace WalaPaNameHehe.Multiplayer
         public int currentDay => UseNetworkState ? networkCurrentDay.Value : localCurrentDay;
         public int requiredSamples => UseNetworkState ? networkRequiredSamples.Value : localRequiredSamples;
         public int collectedSamples => UseNetworkState ? networkCollectedSamples.Value : localCollectedSamples;
+        public int nextRoamerSpawnDay => UseNetworkState ? networkNextRoamerSpawnDay.Value : localNextRoamerSpawnDay;
         public bool isExtractionAvailable => UseNetworkState ? networkIsExtractionAvailable.Value : localIsExtractionAvailable;
         public float extractionTimeRemaining => UseNetworkState ? networkExtractionTimeRemaining.Value : localExtractionTimeRemaining;
         public ExpeditionState CurrentState => UseNetworkState ? networkExpeditionState.Value : localExpeditionState;
@@ -408,7 +411,7 @@ namespace WalaPaNameHehe.Multiplayer
 
         public void FailExpedition()
         {
-            FailExpeditionInternal(resetToDay1: false);
+            FailExpeditionInternal(resetToDay1: true);
         }
 
         private void FailExpeditionInternal(bool resetToDay1)
@@ -433,6 +436,8 @@ namespace WalaPaNameHehe.Multiplayer
                 SetRequiredSamples(GetRequiredSamplesForDay(1));
                 SetCollectedSamples(0);
                 SetExtractionAvailable(false);
+                SetNextRoamerSpawnDay(0);
+                HunterMeterManager.Instance?.ResetForNewRun();
             }
             else
             {
@@ -686,6 +691,7 @@ namespace WalaPaNameHehe.Multiplayer
             localCurrentDay = Mathf.Max(1, startingDay);
             localRequiredSamples = GetRequiredSamplesForDay(localCurrentDay);
             localCollectedSamples = 0;
+            localNextRoamerSpawnDay = 0;
             localIsExtractionAvailable = false;
             localExtractionTimeRemaining = 0f;
             localExpeditionState = ExpeditionState.WaitingToStart;
@@ -714,6 +720,7 @@ namespace WalaPaNameHehe.Multiplayer
             networkCurrentDay.Value = localCurrentDay;
             networkRequiredSamples.Value = localRequiredSamples;
             networkCollectedSamples.Value = localCollectedSamples;
+            networkNextRoamerSpawnDay.Value = localNextRoamerSpawnDay;
             networkIsExtractionAvailable.Value = localIsExtractionAvailable;
             networkExtractionTimeRemaining.Value = localExtractionTimeRemaining;
             networkExpeditionState.Value = localExpeditionState;
@@ -724,6 +731,7 @@ namespace WalaPaNameHehe.Multiplayer
             localCurrentDay = networkCurrentDay.Value;
             localRequiredSamples = networkRequiredSamples.Value;
             localCollectedSamples = networkCollectedSamples.Value;
+            localNextRoamerSpawnDay = networkNextRoamerSpawnDay.Value;
             localIsExtractionAvailable = networkIsExtractionAvailable.Value;
             localExtractionTimeRemaining = networkExtractionTimeRemaining.Value;
             localExpeditionState = networkExpeditionState.Value;
@@ -803,6 +811,21 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             localCollectedSamples = value;
+        }
+
+        public void SetNextRoamerSpawnDay(int value)
+        {
+            if (UseNetworkState)
+            {
+                if (!IsServer)
+                {
+                    return;
+                }
+
+                networkNextRoamerSpawnDay.Value = value;
+            }
+
+            localNextRoamerSpawnDay = value;
         }
 
         private void SetExtractionAvailable(bool value)
