@@ -241,29 +241,29 @@ namespace WalaPaNameHehe
                 EnsureGetUpCameraOverride();
             }
 
-             if (cameraPivot != null && headTarget != null)
-             {
-                 Vector3 targetPos = headTarget.position;
-                 int groundMask = LayerMask.GetMask("Ground");
-                 if (groundMask == 0)
-                 {
-                     int ignoreMask = LayerMask.GetMask("Player");
-                     groundMask = ~ignoreMask;
+              if (cameraPivot != null && headTarget != null)
+              {
+                  Vector3 targetPos = headTarget.position;
+                  int groundMask = LayerMask.GetMask("Ground");
+                  if (groundMask == 0)
+                  {
+                      int ignoreMask = LayerMask.GetMask("Player");
+                      groundMask = ~ignoreMask;
+                  }
+
+                  Vector3 rayStart = targetPos + Vector3.up * 2f;
+                  if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 20f, groundMask, QueryTriggerInteraction.Ignore))
+                  {
+                      float minY = hit.point.y + 0.05f;
+                      if (targetPos.y < minY)
+                      {
+                          targetPos.y = minY;
+                     }
                  }
 
-                 Vector3 rayStart = targetPos + Vector3.up * 2f;
-                 if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 20f, groundMask, QueryTriggerInteraction.Ignore))
-                 {
-                     float minY = hit.point.y + 0.05f;
-                     if (targetPos.y < minY)
-                     {
-                         targetPos.y = minY;
-                    }
-                }
-
-                cameraPivot.position = targetPos;
-                cameraPivot.rotation = headTarget.rotation;
-            }
+                  cameraPivot.position = targetPos;
+                  cameraPivot.rotation = headTarget.rotation;
+              }
 
             if (isBlendingGetUp)
             {

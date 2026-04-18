@@ -46,6 +46,9 @@ public class DinoAIEditor : Editor
     private SerializedProperty enableAttackKillProp;
     private SerializedProperty attackKillRadiusProp;
     private SerializedProperty attackCheckIntervalProp;
+    private SerializedProperty jumpAttackRadiusProp;
+    private SerializedProperty jumpAttackDurationSecondsProp;
+    private SerializedProperty jumpAttackHeightProp;
     private SerializedProperty snapToGroundProp;
     private SerializedProperty groundLayersProp;
     private SerializedProperty groundRayStartHeightProp;
@@ -99,6 +102,9 @@ public class DinoAIEditor : Editor
         enableAttackKillProp = serializedObject.FindProperty("enableAttackKill");
         attackKillRadiusProp = serializedObject.FindProperty("attackKillRadius");
         attackCheckIntervalProp = serializedObject.FindProperty("attackCheckInterval");
+        jumpAttackRadiusProp = serializedObject.FindProperty("jumpAttackRadius");
+        jumpAttackDurationSecondsProp = serializedObject.FindProperty("jumpAttackDurationSeconds");
+        jumpAttackHeightProp = serializedObject.FindProperty("jumpAttackHeight");
         snapToGroundProp = serializedObject.FindProperty("snapToGround");
         groundLayersProp = serializedObject.FindProperty("groundLayers");
         groundRayStartHeightProp = serializedObject.FindProperty("groundRayStartHeight");
@@ -229,6 +235,12 @@ public class DinoAIEditor : Editor
         {
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("Attack", EditorStyles.boldLabel);
+            if (isHunter)
+            {
+                EditorGUILayout.PropertyField(jumpAttackRadiusProp, new GUIContent("Jump Attack Radius"));
+                EditorGUILayout.PropertyField(jumpAttackDurationSecondsProp, new GUIContent("Jump Attack Duration Seconds"));
+                EditorGUILayout.PropertyField(jumpAttackHeightProp, new GUIContent("Jump Attack Height"));
+            }
             EditorGUILayout.PropertyField(enableAttackKillProp, new GUIContent("Enable Attack Kill"));
             if (enableAttackKillProp.boolValue)
             {

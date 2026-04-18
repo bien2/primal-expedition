@@ -109,6 +109,14 @@ namespace WalaPaNameHehe
         }
         [SerializeField] private ApexDayThreshold[] apexDayThresholds;
 
+        [Header("Abyss")]
+        [SerializeField] private GameObject abyssPrefab;
+        [Min(0f)] [SerializeField] private float abyssSpawnpoint = 3f;
+        [Min(0.1f)] [SerializeField] private float abyssWaterSeconds = 30f;
+        [Min(0f)] [SerializeField] private float abyssKillCooldownSeconds = 60f;
+        [Min(0.05f)] [SerializeField] private float abyssCheckIntervalSeconds = 0.5f;
+        [SerializeField] private bool abyssDebugSpawnOnly;
+
         private readonly Dictionary<int, List<GameObject>> spawnedByConfigIndex = new();
         private int[] prefabRoundRobinIndex;
         private GameObject spawnedPlunderer;
@@ -125,6 +133,19 @@ namespace WalaPaNameHehe
         private readonly List<GameObject> spawnedRoamers = new();
         private bool spawnLoopsStarted;
         private readonly HashSet<int> warnedScenePrefabInstanceIds = new();
+        private Coroutine abyssLoop;
+        private float nextAbyssAllowedTime;
+        private bool abyssWasOnCooldown;
+        private readonly Dictionary<ulong, float> abyssWaterEnterTimeByClientId = new();
+        private readonly Dictionary<ulong, PlayerMovement> abyssPlayersByClientId = new();
+        private readonly HashSet<ulong> abyssCurrentWaterClientIds = new();
+        private readonly List<ulong> abyssTieCandidates = new(4);
+        private readonly List<ulong> abyssRemoveCandidates = new(8);
+        private readonly Dictionary<int, float> abyssWaterEnterTimeByInstanceId = new();
+        private readonly Dictionary<int, PlayerMovement> abyssPlayersByInstanceId = new();
+        private readonly HashSet<int> abyssCurrentWaterInstanceIds = new();
+        private readonly List<int> abyssTieCandidatesOffline = new(4);
+        private readonly List<int> abyssRemoveCandidatesOffline = new(8);
 
         private void Awake()
         {
@@ -218,7 +239,311 @@ namespace WalaPaNameHehe
             spawnLoopsStarted = true;
             StartCoroutine(SpawnLoop());
             plundererLoop = StartCoroutine(PlundererSpawnLoop());
+            abyssLoop = StartCoroutine(AbyssLoop());
             SpawnHunter();
+        }
+
+        private IEnumerator AbyssLoop()
+        {
+            while (true)
+            {
+                TickAbyss();
+                yield return new WaitForSeconds(Mathf.Max(0.05f, abyssCheckIntervalSeconds));
+            }
+        }
+
+        private void TickAbyss()
+        {
+            if (abyssPrefab == null)
+            {
+                return;
+            }
+
+            if (!IsServerActive() && !allowOfflineSpawn)
+            {
+                return;
+            }
+
+            float now = Time.time;
+            bool onCooldown = now < nextAbyssAllowedTime;
+
+            NetworkManager nm = NetworkManager.Singleton;
+            if (IsServerActive() && nm != null)
+            {
+                abyssPlayersByClientId.Clear();
+                abyssCurrentWaterClientIds.Clear();
+
+                IReadOnlyList<NetworkClient> clients = nm.ConnectedClientsList;
+                if (clients != null)
+                {
+                    for (int i = 0; i < clients.Count; i++)
+                    {
+                        NetworkClient client = clients[i];
+                        if (client == null || client.PlayerObject == null)
+                        {
+                            continue;
+                        }
+
+                        PlayerMovement player = client.PlayerObject.GetComponent<PlayerMovement>();
+                        if (player == null || player.IsDead)
+                        {
+                            continue;
+                        }
+
+                        ulong clientId = player.OwnerClientId;
+                        abyssPlayersByClientId[clientId] = player;
+
+                        if (!player.IsInWater)
+                        {
+                            continue;
+                        }
+
+                        abyssCurrentWaterClientIds.Add(clientId);
+                        if (!abyssWaterEnterTimeByClientId.ContainsKey(clientId))
+                        {
+                            abyssWaterEnterTimeByClientId[clientId] = now;
+                        }
+                    }
+                }
+
+                abyssRemoveCandidates.Clear();
+                foreach (KeyValuePair<ulong, float> kvp in abyssWaterEnterTimeByClientId)
+                {
+                    if (!abyssCurrentWaterClientIds.Contains(kvp.Key))
+                    {
+                        abyssRemoveCandidates.Add(kvp.Key);
+                    }
+                }
+                for (int i = 0; i < abyssRemoveCandidates.Count; i++)
+                {
+                    abyssWaterEnterTimeByClientId.Remove(abyssRemoveCandidates[i]);
+                }
+
+                if (onCooldown)
+                {
+                    abyssWasOnCooldown = true;
+                    return;
+                }
+
+                if (abyssWasOnCooldown)
+                {
+                    abyssWasOnCooldown = false;
+                    foreach (ulong clientId in abyssCurrentWaterClientIds)
+                    {
+                        abyssWaterEnterTimeByClientId[clientId] = now;
+                    }
+                }
+
+                if (abyssCurrentWaterClientIds.Count <= 0)
+                {
+                    return;
+                }
+
+                float bestEnterTime = float.MaxValue;
+                abyssTieCandidates.Clear();
+                foreach (ulong clientId in abyssCurrentWaterClientIds)
+                {
+                    if (!abyssWaterEnterTimeByClientId.TryGetValue(clientId, out float enterTime))
+                    {
+                        continue;
+                    }
+
+                    if (enterTime < bestEnterTime - 0.0001f)
+                    {
+                        bestEnterTime = enterTime;
+                        abyssTieCandidates.Clear();
+                        abyssTieCandidates.Add(clientId);
+                    }
+                    else if (Mathf.Abs(enterTime - bestEnterTime) <= 0.0001f)
+                    {
+                        abyssTieCandidates.Add(clientId);
+                    }
+                }
+
+                if (abyssTieCandidates.Count <= 0)
+                {
+                    return;
+                }
+
+                if (now - bestEnterTime < Mathf.Max(0.05f, abyssWaterSeconds))
+                {
+                    return;
+                }
+
+                ulong chosenClientId = abyssTieCandidates.Count == 1
+                    ? abyssTieCandidates[0]
+                    : abyssTieCandidates[Random.Range(0, abyssTieCandidates.Count)];
+
+                if (!abyssPlayersByClientId.TryGetValue(chosenClientId, out PlayerMovement target) || target == null || target.IsDead)
+                {
+                    return;
+                }
+
+                Vector3 spawnPosition = target.transform.position + Vector3.down * Mathf.Max(0f, abyssSpawnpoint);
+                GameObject instance = Instantiate(abyssPrefab, spawnPosition, Quaternion.Euler(-90f, 0f, 0f));
+                if (IsServerActive())
+                {
+                    NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                    if (netObj == null)
+                    {
+                        Debug.LogWarning($"DinoSpawnerManager: Abyss prefab '{abyssPrefab.name}' is missing NetworkObject. Destroying spawned instance.");
+                        Destroy(instance);
+                        return;
+                    }
+                    if (!netObj.IsSpawned)
+                    {
+                        netObj.Spawn(true);
+                    }
+                }
+
+                if (!abyssDebugSpawnOnly)
+                {
+                    DinoAttackController attackController = instance.GetComponent<DinoAttackController>();
+                    if (attackController != null)
+                    {
+                        attackController.ForceInstakill(target);
+                    }
+                    else
+                    {
+                        PlayerHitHandler hitHandler = target.GetComponent<PlayerHitHandler>();
+                        if (hitHandler == null)
+                        {
+                            hitHandler = target.GetComponentInChildren<PlayerHitHandler>(true);
+                        }
+                        hitHandler?.ServerApplyInstakillWithRagdoll(Vector3.zero);
+                    }
+                }
+
+                nextAbyssAllowedTime = now + Mathf.Max(0f, abyssKillCooldownSeconds);
+                return;
+            }
+
+            PlayerMovement[] offlinePlayers = FindObjectsByType<PlayerMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            if (offlinePlayers == null || offlinePlayers.Length == 0)
+            {
+                return;
+            }
+
+            abyssPlayersByInstanceId.Clear();
+            abyssCurrentWaterInstanceIds.Clear();
+            for (int i = 0; i < offlinePlayers.Length; i++)
+            {
+                PlayerMovement offlinePlayer = offlinePlayers[i];
+                if (offlinePlayer == null || offlinePlayer.IsDead)
+                {
+                    continue;
+                }
+
+                int instanceId = offlinePlayer.GetInstanceID();
+                abyssPlayersByInstanceId[instanceId] = offlinePlayer;
+
+                if (!offlinePlayer.IsInWater)
+                {
+                    continue;
+                }
+
+                abyssCurrentWaterInstanceIds.Add(instanceId);
+                if (!abyssWaterEnterTimeByInstanceId.ContainsKey(instanceId))
+                {
+                    abyssWaterEnterTimeByInstanceId[instanceId] = now;
+                }
+            }
+
+            abyssRemoveCandidatesOffline.Clear();
+            foreach (KeyValuePair<int, float> kvpOffline in abyssWaterEnterTimeByInstanceId)
+            {
+                if (!abyssCurrentWaterInstanceIds.Contains(kvpOffline.Key))
+                {
+                    abyssRemoveCandidatesOffline.Add(kvpOffline.Key);
+                }
+            }
+            for (int i = 0; i < abyssRemoveCandidatesOffline.Count; i++)
+            {
+                abyssWaterEnterTimeByInstanceId.Remove(abyssRemoveCandidatesOffline[i]);
+            }
+
+            if (onCooldown)
+            {
+                abyssWasOnCooldown = true;
+                return;
+            }
+
+            if (abyssWasOnCooldown)
+            {
+                abyssWasOnCooldown = false;
+                foreach (int instanceId in abyssCurrentWaterInstanceIds)
+                {
+                    abyssWaterEnterTimeByInstanceId[instanceId] = now;
+                }
+            }
+
+            if (abyssCurrentWaterInstanceIds.Count <= 0)
+            {
+                return;
+            }
+
+            float bestEnterTimeOffline = float.MaxValue;
+            abyssTieCandidatesOffline.Clear();
+            foreach (int instanceId in abyssCurrentWaterInstanceIds)
+            {
+                if (!abyssWaterEnterTimeByInstanceId.TryGetValue(instanceId, out float enterTimeOffline))
+                {
+                    continue;
+                }
+
+                if (enterTimeOffline < bestEnterTimeOffline - 0.0001f)
+                {
+                    bestEnterTimeOffline = enterTimeOffline;
+                    abyssTieCandidatesOffline.Clear();
+                    abyssTieCandidatesOffline.Add(instanceId);
+                }
+                else if (Mathf.Abs(enterTimeOffline - bestEnterTimeOffline) <= 0.0001f)
+                {
+                    abyssTieCandidatesOffline.Add(instanceId);
+                }
+            }
+
+            if (abyssTieCandidatesOffline.Count <= 0)
+            {
+                return;
+            }
+
+            if (now - bestEnterTimeOffline < Mathf.Max(0.05f, abyssWaterSeconds))
+            {
+                return;
+            }
+
+            int chosenInstanceId = abyssTieCandidatesOffline.Count == 1
+                ? abyssTieCandidatesOffline[0]
+                : abyssTieCandidatesOffline[Random.Range(0, abyssTieCandidatesOffline.Count)];
+
+            if (!abyssPlayersByInstanceId.TryGetValue(chosenInstanceId, out PlayerMovement targetOffline) || targetOffline == null || targetOffline.IsDead)
+            {
+                return;
+            }
+
+            Vector3 spawnPositionOffline = targetOffline.transform.position + Vector3.down * Mathf.Max(0f, abyssSpawnpoint);
+            GameObject instanceOffline = Instantiate(abyssPrefab, spawnPositionOffline, Quaternion.Euler(-90f, 0f, 0f));
+
+            if (!abyssDebugSpawnOnly)
+            {
+                DinoAttackController attackControllerOffline = instanceOffline.GetComponent<DinoAttackController>();
+                if (attackControllerOffline != null)
+                {
+                    attackControllerOffline.ForceInstakill(targetOffline);
+                }
+                else
+                {
+                    PlayerHitHandler hitHandlerOffline = targetOffline.GetComponent<PlayerHitHandler>();
+                    if (hitHandlerOffline == null)
+                    {
+                        hitHandlerOffline = targetOffline.GetComponentInChildren<PlayerHitHandler>(true);
+                    }
+                    hitHandlerOffline?.ServerApplyInstakillWithRagdoll(Vector3.zero);
+                }
+            }
+
+            nextAbyssAllowedTime = now + Mathf.Max(0f, abyssKillCooldownSeconds);
         }
 
         private void RefreshSpawnPoints()
@@ -1159,6 +1484,7 @@ namespace WalaPaNameHehe
             RegisterNetworkPrefab(nm, plundererPrefab, "Plunderer", canAdd);
             RegisterNetworkPrefab(nm, hunterPrefab, "Hunter", canAdd);
             RegisterNetworkPrefab(nm, apexPrefab, "Apex", canAdd);
+            RegisterNetworkPrefab(nm, abyssPrefab, "Abyss", canAdd);
         }
 
         private void RegisterNetworkPrefab(NetworkManager nm, GameObject prefab, string label, bool canAdd)

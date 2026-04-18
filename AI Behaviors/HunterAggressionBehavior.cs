@@ -244,6 +244,16 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
 
         ai.SetHunterHiddenMode(false);
 
+        if (ai.IsJumpAttacking)
+        {
+            return;
+        }
+
+        if (ai.TryStartAlertRoarThenJump(target))
+        {
+            return;
+        }
+
         if (ai.Agent == null)
         {
             return;
