@@ -179,19 +179,27 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            if (playerMovement == null || !playerMovement.IsOwner)
+            if (playerMovement == null)
             {
                 return;
             }
 
-            if ((Cursor.visible || Cursor.lockState != CursorLockMode.Locked) && !isHolding && !isDownedRagdoll && !followGetUp)
+            if (playerMovement.IsOwner &&
+                (Cursor.visible || Cursor.lockState != CursorLockMode.Locked) &&
+                !isHolding &&
+                !isDownedRagdoll &&
+                !followGetUp)
             {
                 return;
             }
 
             if (cameraPivot == null)
             {
-                cameraPivot = playerMovement.CameraPivot;
+                Transform pivot = playerMovement.CameraPivot;
+                if (pivot != null && (pivot == playerMovement.transform || pivot.IsChildOf(playerMovement.transform)))
+                {
+                    cameraPivot = pivot;
+                }
                 if (cameraPivot != null && !hasStoredCameraPivot)
                 {
                     cameraPivotLocalPos = cameraPivot.localPosition;
@@ -212,7 +220,20 @@ namespace WalaPaNameHehe
 
             if (cameraPivot != null && headTarget != null)
             {
-                cameraPivot.position = headTarget.position;
+                Vector3 targetPos = headTarget.position;
+                int ignoreMask = LayerMask.GetMask("Player");
+                int groundMask = ~ignoreMask;
+                Vector3 rayStart = targetPos + Vector3.up * 0.2f;
+                if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 2f, groundMask, QueryTriggerInteraction.Ignore))
+                {
+                    float minY = hit.point.y + 0.05f;
+                    if (targetPos.y < minY)
+                    {
+                        targetPos.y = minY;
+                    }
+                }
+
+                cameraPivot.position = targetPos;
                 cameraPivot.rotation = headTarget.rotation;
             }
 
@@ -245,8 +266,12 @@ namespace WalaPaNameHehe
         {
             isHolding = false;
             holdPoint = null;
+            isDownedRagdoll = false;
+            hasDownedState = false;
             DetachFromHoldPoint();
             RestoreCameraPivot();
+            RestoreGetUpCameraOverride();
+            ApplyGetUpSuppression(false);
             ClearExternalCamera();
             SetRagdollActive(false, false);
         }

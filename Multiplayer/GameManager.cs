@@ -54,6 +54,7 @@ namespace WalaPaNameHehe.Multiplayer
 #endif
         [SerializeField, HideInInspector] private string lobbySceneName = "Lobby";
         [Min(0f)] [SerializeField] private float returnToLobbyDelaySeconds = 0.25f;
+        [Min(0f)] [SerializeField] private float sceneFadeDurationSeconds = 1.25f;
 
         private readonly NetworkVariable<int> networkCurrentDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkRequiredSamples = new(writePerm: NetworkVariableWritePermission.Server);
@@ -80,6 +81,7 @@ namespace WalaPaNameHehe.Multiplayer
         public float extractionTimeRemaining => UseNetworkState ? networkExtractionTimeRemaining.Value : localExtractionTimeRemaining;
         public ExpeditionState CurrentState => UseNetworkState ? networkExpeditionState.Value : localExpeditionState;
         public bool IsReturningToLobby => returningToLobby;
+        public float SceneFadeDurationSeconds => sceneFadeDurationSeconds;
 
         private NetworkManager ActiveNetworkManager
         {
@@ -125,6 +127,7 @@ namespace WalaPaNameHehe.Multiplayer
             DontDestroyOnLoad(gameObject);
 
             InitializeLocalState();
+            SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
         public override void OnNetworkSpawn()
@@ -154,6 +157,131 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             networkExpeditionState.OnValueChanged -= OnExpeditionStateChanged;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!returningToLobby)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(lobbySceneName) && scene.name == lobbySceneName)
+            {
+                returningToLobby = false;
+                if (UseNetworkState && HasAuthority)
+                {
+                    StartCoroutine(RespawnPlayersInLobbyRoutine());
+                }
+            }
+        }
+
+        private IEnumerator RespawnPlayersInLobbyRoutine()
+        {
+            if (!UseNetworkState)
+            {
+                yield break;
+            }
+
+            NetworkManager nm = ActiveNetworkManager;
+            if (nm == null || !nm.IsListening || !nm.IsServer)
+            {
+                yield break;
+            }
+
+            // Allow scene objects (spawn point) time to enable.
+            yield return null;
+
+            PlayerSpawnPoint spawnPoint = FindLobbySpawnPoint();
+            if (spawnPoint == null)
+            {
+                yield break;
+            }
+
+            foreach (var kvp in nm.ConnectedClients)
+            {
+                NetworkClient client = kvp.Value;
+                if (client == null || client.PlayerObject == null)
+                {
+                    continue;
+                }
+
+                NetworkObject playerObject = client.PlayerObject;
+                TeleportNetworkObject(playerObject, spawnPoint.transform.position, spawnPoint.transform.rotation);
+
+                PlayerMovement movement = playerObject.GetComponentInChildren<PlayerMovement>(true);
+                if (movement != null)
+                {
+                    movement.ServerForceRevive();
+                }
+            }
+        }
+
+        private PlayerSpawnPoint FindLobbySpawnPoint()
+        {
+            if (string.IsNullOrWhiteSpace(lobbySceneName))
+            {
+                return null;
+            }
+
+            Scene lobbyScene = SceneManager.GetSceneByName(lobbySceneName);
+            PlayerSpawnPoint[] spawnPoints = FindObjectsByType<PlayerSpawnPoint>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < spawnPoints.Length; i++)
+            {
+                PlayerSpawnPoint candidate = spawnPoints[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (lobbyScene.IsValid() && candidate.gameObject.scene != lobbyScene)
+                {
+                    continue;
+                }
+
+                return candidate;
+            }
+
+            return null;
+        }
+
+        private static void TeleportNetworkObject(NetworkObject playerObject, Vector3 position, Quaternion rotation)
+        {
+            if (playerObject == null)
+            {
+                return;
+            }
+
+            Transform t = playerObject.transform;
+            if (t == null)
+            {
+                return;
+            }
+
+            Rigidbody rb = playerObject.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+                rb.position = position;
+                rb.rotation = rotation;
+            }
+
+            Unity.Netcode.Components.NetworkTransform netTransform = playerObject.GetComponent<Unity.Netcode.Components.NetworkTransform>();
+            if (netTransform != null)
+            {
+                try
+                {
+                    netTransform.Teleport(position, rotation, t.localScale);
+                    return;
+                }
+                catch (System.Exception)
+                {
+                }
+            }
+
+            t.SetPositionAndRotation(position, rotation);
         }
 
         private void Update()
@@ -181,6 +309,8 @@ namespace WalaPaNameHehe.Multiplayer
                 StartExpeditionServerRpc();
                 return;
             }
+
+            returningToLobby = false;
 
             if (CurrentState != ExpeditionState.WaitingToStart)
             {
@@ -334,6 +464,17 @@ namespace WalaPaNameHehe.Multiplayer
 
         private IEnumerator ReturnToLobbyRoutine()
         {
+            bool useNetwork = UseNetworkState;
+            NetworkManager nm = useNetwork ? ActiveNetworkManager : null;
+            if (useNetwork)
+            {
+                if (nm == null || !nm.IsListening || !nm.IsServer || nm.SceneManager == null)
+                {
+                    returningToLobby = false;
+                    yield break;
+                }
+            }
+
             float delay = Mathf.Max(0f, returnToLobbyDelaySeconds);
             if (delay > 0f)
             {
@@ -342,11 +483,31 @@ namespace WalaPaNameHehe.Multiplayer
 
             ClearInventoriesBeforeLobby();
 
-            if (UseNetworkState)
+            float fadeDuration = Mathf.Max(0f, sceneFadeDurationSeconds);
+            if (fadeDuration > 0.01f && !Application.isBatchMode)
             {
-                NetworkManager nm = ActiveNetworkManager;
+                if (useNetwork)
+                {
+                    BeginSceneFadeClientRpc(fadeDuration);
+                }
+                else
+                {
+                    WalaPaNameHehe.SceneFader.FadeOutAndPrepareFadeIn(fadeDuration);
+                }
+
+                yield return new WaitForSecondsRealtime(fadeDuration);
+            }
+
+            if (useNetwork)
+            {
+                nm = ActiveNetworkManager;
                 if (nm == null || !nm.IsListening || !nm.IsServer || nm.SceneManager == null)
                 {
+                    returningToLobby = false;
+                    if (fadeDuration > 0.01f && !Application.isBatchMode)
+                    {
+                        WalaPaNameHehe.SceneFader.FadeIn(fadeDuration);
+                    }
                     yield break;
                 }
 
@@ -355,6 +516,12 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             SceneManager.LoadScene(lobbySceneName, LoadSceneMode.Single);
+        }
+
+        [ClientRpc]
+        private void BeginSceneFadeClientRpc(float duration)
+        {
+            WalaPaNameHehe.SceneFader.FadeOutAndPrepareFadeIn(duration);
         }
 
         private void ClearInventoriesBeforeLobby()
@@ -404,13 +571,14 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            PlayerMovement[] players = FindObjectsByType<PlayerMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            PlayerMovement[] players = FindObjectsByType<PlayerMovement>(FindObjectsInactive.Include, FindObjectsSortMode.None);
             if (players == null || players.Length == 0)
             {
                 allDeadTimer = 0f;
                 return;
             }
 
+            bool hasRelevantPlayers = false;
             bool anyAlive = false;
             for (int i = 0; i < players.Length; i++)
             {
@@ -420,11 +588,30 @@ namespace WalaPaNameHehe.Multiplayer
                     continue;
                 }
 
+                if (UseNetworkState)
+                {
+                    if (!player.IsSpawned)
+                    {
+                        continue;
+                    }
+                }
+                else if (!player.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                hasRelevantPlayers = true;
                 if (!player.IsDead)
                 {
                     anyAlive = true;
                     break;
                 }
+            }
+
+            if (!hasRelevantPlayers)
+            {
+                allDeadTimer = 0f;
+                return;
             }
 
             if (anyAlive)

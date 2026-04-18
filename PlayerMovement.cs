@@ -229,9 +229,22 @@ namespace WalaPaNameHehe
 
         private void Start()
         {
-            if (cameraPivot == null && Camera.main != null)
+            if (cameraPivot == null)
             {
-                cameraPivot = Camera.main.transform;
+                Camera childCamera = GetComponentInChildren<Camera>(true);
+                if (childCamera != null)
+                {
+                    cameraPivot = childCamera.transform;
+                }
+                else if (Camera.main != null && Camera.main.transform != null && Camera.main.transform.IsChildOf(transform))
+                {
+                    cameraPivot = Camera.main.transform;
+                }
+            }
+
+            if (networkPitchPivot == null)
+            {
+                networkPitchPivot = cameraPivot;
             }
 
             if (footstepAudioSource == null)
@@ -1052,6 +1065,71 @@ namespace WalaPaNameHehe
             WalaPaNameHehe.Multiplayer.HunterMeterManager.Instance?.ReportDeath(this);
             ClearDinoTargets();
             return true;
+        }
+
+        public void ServerForceRevive()
+        {
+            if (IsNetworkActive())
+            {
+                if (!IsServer)
+                {
+                    return;
+                }
+
+                if (!syncedIsDead.Value)
+                {
+                    return;
+                }
+
+                syncedIsDead.Value = false;
+            }
+            else
+            {
+                if (!isDeadOffline)
+                {
+                    return;
+                }
+
+                isDeadOffline = false;
+            }
+
+            if (respawnRoutine != null)
+            {
+                StopCoroutine(respawnRoutine);
+                respawnRoutine = null;
+            }
+
+            if (ragdollController != null)
+            {
+                ragdollController.ResetRagdoll();
+            }
+        }
+
+        public void DebugRequestKillSelf()
+        {
+            if (IsDead)
+            {
+                return;
+            }
+
+            if (IsNetworkActive())
+            {
+                if (!IsOwner)
+                {
+                    return;
+                }
+
+                DebugKillSelfServerRpc();
+                return;
+            }
+
+            ServerKill();
+        }
+
+        [ServerRpc(RequireOwnership = true)]
+        private void DebugKillSelfServerRpc(ServerRpcParams serverRpcParams = default)
+        {
+            ServerKill();
         }
 
         public void SetExternalSpeedMultiplier(float multiplier)
