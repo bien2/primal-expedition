@@ -26,9 +26,12 @@ namespace WalaPaNameHehe.Multiplayer
 
         [Header("Debug")]
         [SerializeField] private bool showGameManagerState = true;
+        [SerializeField] private bool showKillSelfButton = true;
+        [SerializeField] private string killSelfButtonText = "Kill Me";
 
         private BloodSampleSubmitter bloodSampleSubmitter;
         private DayNightTimer dayNightTimer;
+        private PlayerMovement localPlayer;
 
         private void OnGUI()
         {
@@ -114,6 +117,30 @@ namespace WalaPaNameHehe.Multiplayer
                 GUI.Label(new Rect(x, lineY, panelSize.x, lineHeight), lines[i]);
                 lineY += lineHeight + panelSpacing;
             }
+
+            if (!showKillSelfButton)
+            {
+                return;
+            }
+
+            PlayerMovement player = ResolveLocalPlayer();
+            if (player == null)
+            {
+                return;
+            }
+
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !player.IsOwner)
+            {
+                return;
+            }
+
+            Rect buttonRect = new Rect(x, lineY + panelSpacing, panelSize.x, Mathf.Max(24f, panelSize.y));
+            GUI.enabled = !player.IsDead;
+            if (GUI.Button(buttonRect, string.IsNullOrWhiteSpace(killSelfButtonText) ? "Kill Me" : killSelfButtonText))
+            {
+                player.DebugRequestKillSelf();
+            }
+            GUI.enabled = true;
         }
 
         private void DrawPanel(Rect rect)
@@ -135,6 +162,61 @@ namespace WalaPaNameHehe.Multiplayer
             {
                 dayNightTimer = FindFirstObjectByType<DayNightTimer>(FindObjectsInactive.Exclude);
             }
+        }
+
+        private PlayerMovement ResolveLocalPlayer()
+        {
+            if (localPlayer != null)
+            {
+                if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+                {
+                    if (!localPlayer.IsSpawned)
+                    {
+                        localPlayer = null;
+                    }
+                }
+                else if (!localPlayer.gameObject.activeInHierarchy)
+                {
+                    localPlayer = null;
+                }
+            }
+
+            if (localPlayer != null)
+            {
+                return localPlayer;
+            }
+
+            NetworkManager nm = NetworkManager.Singleton;
+            if (nm != null && nm.IsListening)
+            {
+                ulong localId = nm.LocalClientId;
+                if (nm.ConnectedClients != null &&
+                    nm.ConnectedClients.TryGetValue(localId, out NetworkClient client) &&
+                    client != null &&
+                    client.PlayerObject != null)
+                {
+                    localPlayer = client.PlayerObject.GetComponentInChildren<PlayerMovement>(true);
+                    return localPlayer;
+                }
+            }
+
+            PlayerMovement[] players = FindObjectsByType<PlayerMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            for (int i = 0; i < players.Length; i++)
+            {
+                PlayerMovement candidate = players[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (CoopGuard.IsLocalOwnerOrOffline(candidate))
+                {
+                    localPlayer = candidate;
+                    return localPlayer;
+                }
+            }
+
+            return null;
         }
 
         private List<(string label, float meter)> GetHunterMeterList()

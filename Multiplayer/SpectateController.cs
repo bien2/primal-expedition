@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -36,8 +37,8 @@ namespace WalaPaNameHehe.Multiplayer
         private AudioListener currentTargetListener;
         private Camera spectateCamera;
         private AudioListener spectateListener;
-        private Camera[] localCameras;
-        private AudioListener[] localListeners;
+        private readonly Dictionary<Camera, bool> localCameraStates = new();
+        private readonly Dictionary<AudioListener, bool> localListenerStates = new();
         private bool localViewDisabled;
         private readonly List<Renderer> hiddenRenderers = new();
         private readonly Dictionary<Renderer, bool> hiddenRendererStates = new();
@@ -63,6 +64,22 @@ namespace WalaPaNameHehe.Multiplayer
                     blackout = GetComponentInChildren<PlayerDeathBlackout>(true);
                 }
             }
+        }
+
+        private void OnEnable()
+        {
+            SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private void OnDisable()
+        {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            ResetSpectateState();
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            ResetSpectateState();
         }
 
         private void Update()
@@ -149,6 +166,26 @@ namespace WalaPaNameHehe.Multiplayer
             EnableLocalView();
             SetBlackoutEnabled(true);
             SetSpectateCameraActive(false);
+        }
+
+        private void ResetSpectateState()
+        {
+            if (isSpectating)
+            {
+                EndSpectate();
+            }
+
+            if (spectateCamera != null)
+            {
+                Destroy(spectateCamera.gameObject);
+            }
+
+            spectateCamera = null;
+            spectateListener = null;
+            localCameraStates.Clear();
+            localListenerStates.Clear();
+            localViewDisabled = false;
+            wasDead = false;
         }
 
         private void RefreshTargets(bool forceResetIndex)
@@ -319,17 +356,33 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            localCameras = GetComponentsInChildren<Camera>(true);
-            localListeners = GetComponentsInChildren<AudioListener>(true);
+            localCameraStates.Clear();
+            localListenerStates.Clear();
 
+            Camera[] localCameras = GetComponentsInChildren<Camera>(true);
             for (int i = 0; i < localCameras.Length; i++)
             {
-                localCameras[i].enabled = false;
+                Camera cam = localCameras[i];
+                if (cam == null)
+                {
+                    continue;
+                }
+
+                localCameraStates[cam] = cam.enabled;
+                cam.enabled = false;
             }
 
+            AudioListener[] localListeners = GetComponentsInChildren<AudioListener>(true);
             for (int i = 0; i < localListeners.Length; i++)
             {
-                localListeners[i].enabled = false;
+                AudioListener listener = localListeners[i];
+                if (listener == null)
+                {
+                    continue;
+                }
+
+                localListenerStates[listener] = listener.enabled;
+                listener.enabled = false;
             }
 
             localViewDisabled = true;
@@ -342,28 +395,30 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            if (localCameras != null)
+            if (localCameraStates.Count > 0)
             {
-                for (int i = 0; i < localCameras.Length; i++)
+                foreach (var kvp in localCameraStates)
                 {
-                    if (localCameras[i] != null)
+                    if (kvp.Key != null)
                     {
-                        localCameras[i].enabled = true;
+                        kvp.Key.enabled = kvp.Value;
                     }
                 }
             }
 
-            if (localListeners != null)
+            if (localListenerStates.Count > 0)
             {
-                for (int i = 0; i < localListeners.Length; i++)
+                foreach (var kvp in localListenerStates)
                 {
-                    if (localListeners[i] != null)
+                    if (kvp.Key != null)
                     {
-                        localListeners[i].enabled = true;
+                        kvp.Key.enabled = kvp.Value;
                     }
                 }
             }
 
+            localCameraStates.Clear();
+            localListenerStates.Clear();
             localViewDisabled = false;
         }
 

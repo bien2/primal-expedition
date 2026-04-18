@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -33,8 +32,6 @@ namespace WalaPaNameHehe.Multiplayer
 
         private readonly HashSet<ulong> readyClients = new();
         private bool starting;
-        private CanvasGroup fadeGroup;
-        private GameObject fadeRoot;
         private bool shuttingDown;
 
         private void Reset()
@@ -192,12 +189,29 @@ namespace WalaPaNameHehe.Multiplayer
                 yield break;
             }
 
-            BeginFadeClientRpc(fadeDuration);
+            float duration = Mathf.Max(0f, fadeDuration);
+            GameManager manager = GameManager.Instance;
+            if (manager != null)
+            {
+                duration = Mathf.Max(0f, manager.SceneFadeDurationSeconds);
+            }
 
-            float wait = Mathf.Max(0f, fadeDuration) + Mathf.Max(0f, startDelay);
+            if (NetworkManager != null && NetworkManager.IsListening)
+            {
+                if (IsServer)
+                {
+                    BeginFadeClientRpc(duration);
+                }
+            }
+            else
+            {
+                WalaPaNameHehe.SceneFader.FadeOutAndPrepareFadeIn(duration);
+            }
+
+            float wait = duration + Mathf.Max(0f, startDelay);
             if (wait > 0f)
             {
-                yield return new WaitForSeconds(wait);
+                yield return new WaitForSecondsRealtime(wait);
             }
 
             if (!this || shuttingDown)
@@ -265,71 +279,7 @@ namespace WalaPaNameHehe.Multiplayer
         [ClientRpc]
         private void BeginFadeClientRpc(float duration)
         {
-            StartCoroutine(FadeRoutine(duration));
-        }
-
-        private IEnumerator FadeRoutine(float duration)
-        {
-            if (!this || shuttingDown)
-            {
-                yield break;
-            }
-
-            if (fadeGroup == null)
-            {
-                fadeGroup = CreateFadeCanvas();
-            }
-
-            if (fadeGroup == null)
-            {
-                yield break;
-            }
-
-            fadeGroup.alpha = 0f;
-            float t = 0f;
-            float d = Mathf.Max(0.01f, duration);
-            while (t < d)
-            {
-                if (!this || shuttingDown || fadeGroup == null)
-                {
-                    yield break;
-                }
-
-                t += Time.unscaledDeltaTime;
-                fadeGroup.alpha = Mathf.Clamp01(t / d);
-                yield return null;
-            }
-
-            fadeGroup.alpha = 1f;
-        }
-
-        private CanvasGroup CreateFadeCanvas()
-        {
-            if (!this || shuttingDown)
-            {
-                return null;
-            }
-
-            fadeRoot = new GameObject("ReadyZoneFade");
-            DontDestroyOnLoad(fadeRoot);
-            Canvas canvas = fadeRoot.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 9999;
-            CanvasGroup group = fadeRoot.AddComponent<CanvasGroup>();
-            group.interactable = false;
-            group.blocksRaycasts = false;
-
-            GameObject imageObject = new GameObject("Fade");
-            imageObject.transform.SetParent(fadeRoot.transform, false);
-            Image img = imageObject.AddComponent<Image>();
-            img.color = Color.black;
-            RectTransform rect = imageObject.GetComponent<RectTransform>();
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
-
-            return group;
+            WalaPaNameHehe.SceneFader.FadeOutAndPrepareFadeIn(duration);
         }
 
         private void OnDisable()
@@ -341,12 +291,6 @@ namespace WalaPaNameHehe.Multiplayer
         {
             shuttingDown = true;
             StopAllCoroutines();
-            if (fadeRoot != null)
-            {
-                Destroy(fadeRoot);
-                fadeRoot = null;
-                fadeGroup = null;
-            }
         }
     }
 }

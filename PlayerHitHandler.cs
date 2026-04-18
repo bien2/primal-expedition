@@ -607,11 +607,6 @@ namespace WalaPaNameHehe
 
         private void ApplyDropRagdollNow(float durationSeconds)
         {
-            if (IsNetworkActive() && !IsOwner)
-            {
-                return;
-            }
-
             if (ragdollController == null || playerMovement == null)
             {
                 return;
