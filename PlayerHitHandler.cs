@@ -328,6 +328,10 @@ namespace WalaPaNameHehe
 
             if (IsNetworkActive() && IsServer)
             {
+                if (hasAttackerNetworkId && attackerNetworkId != 0)
+                {
+                    playerMovement.ServerSetExternalPov(attackerNetworkId);
+                }
                 ApplyDeathRagdollClientRpc(impulse, hasAttackerNetworkId, attackerNetworkId);
             }
 
@@ -759,6 +763,11 @@ namespace WalaPaNameHehe
 
         public void ServerTriggerBlackoutForOwner()
         {
+            ServerTriggerBlackoutForOwner(true);
+        }
+
+        public void ServerTriggerBlackoutForOwner(bool useFade)
+        {
             if (IsNetworkActive() && !IsServer)
             {
                 return;
@@ -766,7 +775,7 @@ namespace WalaPaNameHehe
 
             if (IsNetworkActive())
             {
-                TriggerBlackoutClientRpc(new ClientRpcParams
+                TriggerBlackoutClientRpc(useFade, new ClientRpcParams
                 {
                     Send = new ClientRpcSendParams
                     {
@@ -776,17 +785,17 @@ namespace WalaPaNameHehe
             }
             else
             {
-                TriggerBlackoutLocal();
+                TriggerBlackoutLocal(useFade);
             }
         }
 
         [ClientRpc]
-        private void TriggerBlackoutClientRpc(ClientRpcParams clientRpcParams = default)
+        private void TriggerBlackoutClientRpc(bool useFade, ClientRpcParams clientRpcParams = default)
         {
-            TriggerBlackoutLocal();
+            TriggerBlackoutLocal(useFade);
         }
 
-        private void TriggerBlackoutLocal()
+        private void TriggerBlackoutLocal(bool useFade)
         {
             if (!IsOwner && IsNetworkActive())
             {
@@ -798,7 +807,7 @@ namespace WalaPaNameHehe
                 // Drop killcam before blackout so we return to local view + black screen.
                 ragdollController?.ClearExternalCamera();
                 deathBlackout.enabled = true;
-                deathBlackout.TriggerImmediateBlackout();
+                deathBlackout.TriggerBlackout(useFade);
             }
         }
 

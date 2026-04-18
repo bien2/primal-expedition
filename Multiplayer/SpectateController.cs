@@ -37,6 +37,18 @@ namespace WalaPaNameHehe.Multiplayer
         private AudioListener currentTargetListener;
         private Camera spectateCamera;
         private AudioListener spectateListener;
+        private Transform spectateCameraOriginalParent;
+        private Vector3 spectateCameraOriginalLocalPosition;
+        private Quaternion spectateCameraOriginalLocalRotation;
+        private bool hasSpectateCameraOriginalTransform;
+        private float spectateCameraOriginalFieldOfView;
+        private float spectateCameraOriginalNearClip;
+        private float spectateCameraOriginalFarClip;
+        private CameraClearFlags spectateCameraOriginalClearFlags;
+        private Color spectateCameraOriginalBackgroundColor;
+        private int spectateCameraOriginalCullingMask;
+        private float spectateCameraOriginalDepth;
+        private bool hasSpectateCameraOriginalSettings;
         private readonly Dictionary<Camera, bool> localCameraStates = new();
         private readonly Dictionary<AudioListener, bool> localListenerStates = new();
         private bool localViewDisabled;
@@ -156,6 +168,7 @@ namespace WalaPaNameHehe.Multiplayer
                 SelectNextTarget();
             }
 
+            ApplyTargetCameraSettings();
             UpdateSpectateCameraTransform();
         }
 
@@ -163,9 +176,9 @@ namespace WalaPaNameHehe.Multiplayer
         {
             isSpectating = false;
             SetSpectateTarget(null);
+            RestoreSpectateCameraTransform();
             EnableLocalView();
             SetBlackoutEnabled(true);
-            SetSpectateCameraActive(false);
         }
 
         private void ResetSpectateState()
@@ -175,13 +188,12 @@ namespace WalaPaNameHehe.Multiplayer
                 EndSpectate();
             }
 
-            if (spectateCamera != null)
-            {
-                Destroy(spectateCamera.gameObject);
-            }
-
+            RestoreSpectateCameraTransform();
             spectateCamera = null;
             spectateListener = null;
+            hasSpectateCameraOriginalTransform = false;
+            hasSpectateCameraOriginalSettings = false;
+            spectateCameraOriginalParent = null;
             localCameraStates.Clear();
             localListenerStates.Clear();
             localViewDisabled = false;
@@ -246,7 +258,6 @@ namespace WalaPaNameHehe.Multiplayer
                 SetSpectateTarget(null);
                 SetBlackoutEnabled(true);
                 EnableLocalView();
-                SetSpectateCameraActive(false);
                 return;
             }
 
@@ -369,7 +380,10 @@ namespace WalaPaNameHehe.Multiplayer
                 }
 
                 localCameraStates[cam] = cam.enabled;
-                cam.enabled = false;
+                if (cam != spectateCamera)
+                {
+                    cam.enabled = false;
+                }
             }
 
             AudioListener[] localListeners = GetComponentsInChildren<AudioListener>(true);
@@ -382,7 +396,10 @@ namespace WalaPaNameHehe.Multiplayer
                 }
 
                 localListenerStates[listener] = listener.enabled;
-                listener.enabled = false;
+                if (listener != spectateListener)
+                {
+                    listener.enabled = false;
+                }
             }
 
             localViewDisabled = true;
@@ -432,17 +449,43 @@ namespace WalaPaNameHehe.Multiplayer
 
         private void EnsureSpectateCamera()
         {
-            if (spectateCamera != null)
+            if (player == null)
             {
                 return;
             }
 
-            GameObject cameraObject = new GameObject("SpectateCamera");
-            cameraObject.transform.SetParent(transform, false);
-            spectateCamera = cameraObject.AddComponent<Camera>();
-            spectateCamera.enabled = false;
-            spectateListener = cameraObject.AddComponent<AudioListener>();
-            spectateListener.enabled = false;
+            if (spectateCamera == null)
+            {
+                spectateCamera = FindFirstCamera(player);
+            }
+            if (spectateCamera == null)
+            {
+                return;
+            }
+
+            spectateListener = spectateCamera.GetComponent<AudioListener>();
+
+            if (!hasSpectateCameraOriginalTransform)
+            {
+                spectateCameraOriginalParent = spectateCamera.transform.parent;
+                spectateCameraOriginalLocalPosition = spectateCamera.transform.localPosition;
+                spectateCameraOriginalLocalRotation = spectateCamera.transform.localRotation;
+                hasSpectateCameraOriginalTransform = true;
+            }
+
+            if (!hasSpectateCameraOriginalSettings)
+            {
+                spectateCameraOriginalFieldOfView = spectateCamera.fieldOfView;
+                spectateCameraOriginalNearClip = spectateCamera.nearClipPlane;
+                spectateCameraOriginalFarClip = spectateCamera.farClipPlane;
+                spectateCameraOriginalClearFlags = spectateCamera.clearFlags;
+                spectateCameraOriginalBackgroundColor = spectateCamera.backgroundColor;
+                spectateCameraOriginalCullingMask = spectateCamera.cullingMask;
+                spectateCameraOriginalDepth = spectateCamera.depth;
+                hasSpectateCameraOriginalSettings = true;
+            }
+
+            spectateCamera.transform.SetParent(null, true);
         }
 
         private void SetSpectateCameraActive(bool active)
@@ -458,6 +501,29 @@ namespace WalaPaNameHehe.Multiplayer
             }
         }
 
+        private void RestoreSpectateCameraTransform()
+        {
+            if (!hasSpectateCameraOriginalTransform || spectateCamera == null)
+            {
+                return;
+            }
+
+            spectateCamera.transform.SetParent(spectateCameraOriginalParent, false);
+            spectateCamera.transform.localPosition = spectateCameraOriginalLocalPosition;
+            spectateCamera.transform.localRotation = spectateCameraOriginalLocalRotation;
+
+            if (hasSpectateCameraOriginalSettings)
+            {
+                spectateCamera.fieldOfView = spectateCameraOriginalFieldOfView;
+                spectateCamera.nearClipPlane = spectateCameraOriginalNearClip;
+                spectateCamera.farClipPlane = spectateCameraOriginalFarClip;
+                spectateCamera.clearFlags = spectateCameraOriginalClearFlags;
+                spectateCamera.backgroundColor = spectateCameraOriginalBackgroundColor;
+                spectateCamera.cullingMask = spectateCameraOriginalCullingMask;
+                spectateCamera.depth = spectateCameraOriginalDepth;
+            }
+        }
+
         private void ApplyTargetCameraSettings()
         {
             if (spectateCamera == null)
@@ -465,7 +531,7 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            Camera targetCam = FindFirstCamera(currentTarget);
+            Camera targetCam = ResolveTargetCamera(currentTarget);
             if (targetCam == null)
             {
                 return;
@@ -494,13 +560,8 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            float dt = Mathf.Max(Time.deltaTime, 0.0001f);
-            float posT = 1f - Mathf.Exp(-Mathf.Max(0.01f, followPositionSmoothing) * dt);
-            float rotT = 1f - Mathf.Exp(-Mathf.Max(0.01f, followRotationSmoothing) * dt);
-
             Transform camTransform = spectateCamera.transform;
-            camTransform.position = Vector3.Lerp(camTransform.position, anchor.position, posT);
-            camTransform.rotation = Quaternion.Slerp(camTransform.rotation, anchor.rotation, rotT);
+            camTransform.SetPositionAndRotation(anchor.position, anchor.rotation);
         }
 
         private static Transform ResolveSpectateAnchor(PlayerMovement target)
@@ -508,6 +569,30 @@ namespace WalaPaNameHehe.Multiplayer
             if (target == null)
             {
                 return null;
+            }
+
+            PlayerMovement.PovMode mode = target.CurrentPovMode;
+            if (mode == PlayerMovement.PovMode.External)
+            {
+                Camera cam = TryResolveExternalKillCamera(target);
+                if (cam != null)
+                {
+                    return cam.transform;
+                }
+            }
+            else if (mode == PlayerMovement.PovMode.Ragdoll)
+            {
+                if (target.TryGetRagdollPovCamera(out Camera ragdollCam))
+                {
+                    return ragdollCam.transform;
+                }
+            }
+            else
+            {
+                if (target.TryGetMainPovCamera(out Camera mainCam))
+                {
+                    return mainCam.transform;
+                }
             }
 
             if (target.NetworkPitchPivot != null)
@@ -520,13 +605,67 @@ namespace WalaPaNameHehe.Multiplayer
                 return target.CameraPivot;
             }
 
-            Camera cam = FindFirstCamera(target);
-            if (cam != null)
+            return target.transform;
+        }
+
+        private static Camera ResolveTargetCamera(PlayerMovement target)
+        {
+            if (target == null)
             {
-                return cam.transform;
+                return null;
             }
 
-            return target.transform;
+            PlayerMovement.PovMode mode = target.CurrentPovMode;
+            if (mode == PlayerMovement.PovMode.External)
+            {
+                Camera cam = TryResolveExternalKillCamera(target);
+                return cam != null ? cam : FindFirstCamera(target);
+            }
+
+            if (mode == PlayerMovement.PovMode.Ragdoll)
+            {
+                if (target.TryGetRagdollPovCamera(out Camera ragdollCam))
+                {
+                    return ragdollCam;
+                }
+
+                return FindFirstCamera(target);
+            }
+
+            if (target.TryGetMainPovCamera(out Camera mainCam))
+            {
+                return mainCam;
+            }
+
+            return FindFirstCamera(target);
+        }
+
+        private static Camera TryResolveExternalKillCamera(PlayerMovement target)
+        {
+            if (target == null)
+            {
+                return null;
+            }
+
+            ulong attackerId = target.ExternalAttackerNetworkObjectId;
+            if (attackerId == 0)
+            {
+                return null;
+            }
+
+            Unity.Netcode.NetworkManager nm = Unity.Netcode.NetworkManager.Singleton;
+            if (nm == null || nm.SpawnManager == null)
+            {
+                return null;
+            }
+
+            if (!nm.SpawnManager.SpawnedObjects.TryGetValue(attackerId, out Unity.Netcode.NetworkObject netObj) || netObj == null)
+            {
+                return null;
+            }
+
+            DinoKillCamera killCam = netObj.GetComponentInChildren<DinoKillCamera>(true);
+            return killCam != null ? killCam.KillCamera : null;
         }
 
         private static Camera FindFirstCamera(PlayerMovement target)

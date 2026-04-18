@@ -20,6 +20,10 @@ public class DinoAttackController : NetworkBehaviour
     [SerializeField] private float knockbackImpulse = 6f;
     [SerializeField] private float knockbackUpward = 1.2f;
 
+    [Header("Blackout")]
+    [SerializeField] private bool useBlackoutOnInstakill = true;
+    [Min(0f)] [SerializeField] private float blackoutDelaySeconds = 1f;
+
     [Header("Animation")]
     [SerializeField] private Animator animator;
     [SerializeField] private string attackStateName = "Attack";
@@ -28,6 +32,8 @@ public class DinoAttackController : NetworkBehaviour
 
     private float nextAttackTime;
     private Coroutine attackRoutine;
+    private Coroutine blackoutRoutine;
+    private bool blackoutTriggeredOrScheduled;
     private DinoAI dinoAi;
     private WalaPaNameHehe.PlayerMovement lastAttackTarget;
 
@@ -72,6 +78,12 @@ public class DinoAttackController : NetworkBehaviour
         {
             StopCoroutine(attackRoutine);
         }
+        if (blackoutRoutine != null)
+        {
+            StopCoroutine(blackoutRoutine);
+            blackoutRoutine = null;
+        }
+        blackoutTriggeredOrScheduled = false;
 
         TriggerAttackAnimation();
         attackRoutine = StartCoroutine(AttackRoutine(target));
@@ -80,6 +92,57 @@ public class DinoAttackController : NetworkBehaviour
             nextAttackTime = Time.time + Mathf.Max(0.05f, attackCooldown);
         }
         lastAttackTarget = target;
+        return true;
+    }
+
+    public bool ForceInstakill(WalaPaNameHehe.PlayerMovement target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        if (IsNetworkActive() && !IsServer)
+        {
+            return false;
+        }
+
+        if (target.IsDead)
+        {
+            return false;
+        }
+
+        lastAttackTarget = target;
+        if (blackoutRoutine != null)
+        {
+            StopCoroutine(blackoutRoutine);
+            blackoutRoutine = null;
+        }
+        blackoutTriggeredOrScheduled = false;
+        TriggerAttackAnimation();
+
+        WalaPaNameHehe.PlayerHitHandler hitHandler = target.GetComponent<WalaPaNameHehe.PlayerHitHandler>();
+        if (hitHandler == null)
+        {
+            hitHandler = target.GetComponentInChildren<WalaPaNameHehe.PlayerHitHandler>();
+        }
+
+        if (hitHandler == null)
+        {
+            return false;
+        }
+
+        Vector3 impulse = GetKnockbackImpulse(target);
+        NetworkObject netObj = GetComponent<NetworkObject>();
+        bool hasAttackerNetworkId = netObj != null && netObj.IsSpawned;
+        ulong attackerNetworkId = hasAttackerNetworkId ? netObj.NetworkObjectId : 0;
+        hitHandler.ServerApplyInstakillWithRagdoll(impulse, hasAttackerNetworkId, attackerNetworkId, transform);
+        ScheduleBlackout(target);
+        if (dinoAi != null)
+        {
+            dinoAi.ChangeState(DinoAI.DinoState.Idle);
+        }
+
         return true;
     }
 
@@ -157,6 +220,7 @@ public class DinoAttackController : NetworkBehaviour
                 bool hasAttackerNetworkId = netObj != null && netObj.IsSpawned;
                 ulong attackerNetworkId = hasAttackerNetworkId ? netObj.NetworkObjectId : 0;
                 hitHandler.ServerApplyInstakillWithRagdoll(impulse, hasAttackerNetworkId, attackerNetworkId, transform);
+                ScheduleBlackout(target);
                 if (dinoAi != null)
                 {
                     dinoAi.ChangeState(DinoAI.DinoState.Idle);
@@ -180,6 +244,11 @@ public class DinoAttackController : NetworkBehaviour
     // Animation event hook: place this on the attack animation at the desired blackout frame.
     public void AnimEvent_TriggerBlackout()
     {
+        if (blackoutTriggeredOrScheduled)
+        {
+            return;
+        }
+
         if (attackEffect != AttackEffect.Instakill)
         {
             return;
@@ -217,7 +286,74 @@ public class DinoAttackController : NetworkBehaviour
         }
 
         Debug.Log("DinoAttackController: Calling ServerTriggerBlackoutForOwner.");
-        hitHandler.ServerTriggerBlackoutForOwner();
+        blackoutTriggeredOrScheduled = true;
+        hitHandler.ServerTriggerBlackoutForOwner(false);
+    }
+
+    private void ScheduleBlackout(WalaPaNameHehe.PlayerMovement target)
+    {
+        if (!useBlackoutOnInstakill)
+        {
+            return;
+        }
+
+        if (blackoutTriggeredOrScheduled)
+        {
+            return;
+        }
+
+        if (attackEffect != AttackEffect.Instakill)
+        {
+            return;
+        }
+
+        if (target == null)
+        {
+            return;
+        }
+
+        if (IsNetworkActive() && !IsServer)
+        {
+            return;
+        }
+
+        if (blackoutRoutine != null)
+        {
+            StopCoroutine(blackoutRoutine);
+        }
+
+        blackoutTriggeredOrScheduled = true;
+        blackoutRoutine = StartCoroutine(BlackoutDelayRoutine(target));
+    }
+
+    private IEnumerator BlackoutDelayRoutine(WalaPaNameHehe.PlayerMovement target)
+    {
+        float delay = Mathf.Max(0f, blackoutDelaySeconds);
+        if (delay > 0f)
+        {
+            yield return new WaitForSeconds(delay);
+        }
+
+        if (target == null)
+        {
+            blackoutRoutine = null;
+            yield break;
+        }
+
+        WalaPaNameHehe.PlayerHitHandler hitHandler = target.GetComponent<WalaPaNameHehe.PlayerHitHandler>();
+        if (hitHandler == null)
+        {
+            hitHandler = target.GetComponentInChildren<WalaPaNameHehe.PlayerHitHandler>(true);
+        }
+
+        if (hitHandler == null)
+        {
+            blackoutRoutine = null;
+            yield break;
+        }
+
+        hitHandler.ServerTriggerBlackoutForOwner(true);
+        blackoutRoutine = null;
     }
 
     private WalaPaNameHehe.PlayerMovement FindNearestPlayerInRange()

@@ -16,6 +16,13 @@ namespace WalaPaNameHehe
             TransformY
         }
 
+        public enum PovMode
+        {
+            Main = 0,
+            Ragdoll = 1,
+            External = 2
+        }
+
     [Header("Movement")]
     [SerializeField] private float moveSpeed = 5f;
     [SerializeField] private float sprintMultiplier = 1.8f;
@@ -165,6 +172,7 @@ namespace WalaPaNameHehe
         private float currentWaterSurfaceY;
         private float cachedDefaultDrag;
         private bool isWaterAffectingCached;
+        private PovMode localPovMode = PovMode.Main;
         private readonly NetworkVariable<float> syncedPitch = new(
             0f,
             NetworkVariableReadPermission.Everyone,
@@ -173,6 +181,11 @@ namespace WalaPaNameHehe
             false,
             NetworkVariableReadPermission.Everyone,
             NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<bool> syncedIsInWater = new(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Owner);
+        private bool lastReportedIsInWater;
 
         public bool IsGrounded => coyoteTimer > 0f;
         private readonly NetworkVariable<bool> syncedIsIsolated = new(
@@ -195,13 +208,24 @@ namespace WalaPaNameHehe
             0f,
             NetworkVariableReadPermission.Everyone,
             NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<int> syncedPovMode = new(
+            (int)PovMode.Main,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<ulong> syncedExternalAttackerNetworkObjectId = new(
+            0,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
 
         public bool HasNearbyPlayer => IsNetworkActive() && !IsOwner ? !syncedIsIsolated.Value : hasNearbyPlayer;
         public bool IsDead => IsNetworkActive() ? syncedIsDead.Value : isDeadOffline;
+        public bool IsInWater => IsNetworkActive() && !IsOwner ? syncedIsInWater.Value : IsWaterAffecting();
         public bool IsIsolated => IsNetworkActive() && !IsOwner ? syncedIsIsolated.Value : isIsolated;
         public float IsolatedDuration => IsNetworkActive() && !IsOwner ? syncedIsolatedDuration.Value : isolatedDuration;
         public float IsolationRadius => isolationRadius;
         public float HunterMeterValue => IsNetworkActive() ? syncedHunterMeter.Value : localHunterMeter;
+        public PovMode CurrentPovMode => IsNetworkActive() ? (PovMode)syncedPovMode.Value : localPovMode;
+        public ulong ExternalAttackerNetworkObjectId => IsNetworkActive() ? syncedExternalAttackerNetworkObjectId.Value : 0;
         public float LookSensitivity
         {
             get => lookSensitivity;
@@ -209,6 +233,20 @@ namespace WalaPaNameHehe
         }
         public Transform CameraPivot => cameraPivot;
         public Transform NetworkPitchPivot => networkPitchPivot;
+
+        public bool TryGetMainPovCamera(out Camera cam)
+        {
+            RefreshPovCameraReferences();
+            cam = mainPovCamera;
+            return cam != null;
+        }
+
+        public bool TryGetRagdollPovCamera(out Camera cam)
+        {
+            RefreshPovCameraReferences();
+            cam = ragdollPovCamera;
+            return cam != null;
+        }
 
     private void Awake()
     {
@@ -265,6 +303,8 @@ namespace WalaPaNameHehe
             }
 
             ResolvePlayerCamera();
+            RefreshPovCameraReferences();
+            ApplyLocalPovCameraState();
 
             rb.interpolation = RigidbodyInterpolation.Interpolate;
             ApplyPhysicsAuthorityMode();
@@ -280,6 +320,8 @@ namespace WalaPaNameHehe
         {
             base.OnNetworkSpawn();
             ApplyPhysicsAuthorityMode();
+            RefreshPovCameraReferences();
+            ApplyLocalPovCameraState();
 
             if (IsServer)
             {
@@ -293,12 +335,16 @@ namespace WalaPaNameHehe
         {
             base.OnGainedOwnership();
             ApplyPhysicsAuthorityMode();
+            RefreshPovCameraReferences();
+            ApplyLocalPovCameraState();
         }
 
         public override void OnLostOwnership()
         {
             base.OnLostOwnership();
             ApplyPhysicsAuthorityMode();
+            RefreshPovCameraReferences();
+            ApplyLocalPovCameraState();
         }
 
         public override void OnNetworkDespawn()
@@ -415,10 +461,12 @@ namespace WalaPaNameHehe
              isSprinting = false;
          }
          float currentMoveSpeed = isSprinting ? moveSpeed * sprintMultiplier : moveSpeed;
-         if (IsWaterAffecting())
+         bool isInWater = IsWaterAffecting();
+         if (isInWater)
          {
              currentMoveSpeed *= Mathf.Clamp(waterMoveSpeedMultiplier, 0.05f, 1f);
          }
+         ReportInWaterState(isInWater);
          float combinedMultiplier = externalSpeedMultiplier * temporarySpeedMultiplier;
          currentMoveSpeed *= Mathf.Max(0.01f, combinedMultiplier);
          Vector3 moveDirection = (transform.right * moveInput.x + transform.forward * moveInput.y).normalized;
@@ -495,6 +543,7 @@ namespace WalaPaNameHehe
             }
 
             waterTriggerIds.Remove(other.GetInstanceID());
+            ReportInWaterState(IsWaterAffecting());
         }
 
         private void TryEnterWater(Collider other)
@@ -506,6 +555,23 @@ namespace WalaPaNameHehe
 
             waterTriggerIds.Add(other.GetInstanceID());
             currentWaterSurfaceY = GetWaterSurfaceY(other);
+            ReportInWaterState(IsWaterAffecting());
+        }
+
+        private void ReportInWaterState(bool isInWater)
+        {
+            if (!IsNetworkActive() || !IsOwner)
+            {
+                return;
+            }
+
+            if (isInWater == lastReportedIsInWater)
+            {
+                return;
+            }
+
+            lastReportedIsInWater = isInWater;
+            syncedIsInWater.Value = isInWater;
         }
 
         private float GetWaterSurfaceY(Collider waterCollider)
@@ -987,6 +1053,8 @@ namespace WalaPaNameHehe
                 {
                     mainListener.enabled = false;
                 }
+
+                SetLocalPovMode(PovMode.Ragdoll);
                 return;
             }
 
@@ -1003,6 +1071,80 @@ namespace WalaPaNameHehe
             {
                 ragdollPovCamera.enabled = false;
             }
+            if (ragdollListener != null)
+            {
+                ragdollListener.enabled = false;
+            }
+
+            SetLocalPovMode(PovMode.Main);
+        }
+
+        public void ServerSetExternalPov(ulong attackerNetworkObjectId)
+        {
+            if (!IsNetworkActive() || !IsServer)
+            {
+                return;
+            }
+
+            syncedExternalAttackerNetworkObjectId.Value = attackerNetworkObjectId;
+            syncedPovMode.Value = (int)PovMode.External;
+        }
+
+        public void ServerClearExternalPov()
+        {
+            if (!IsNetworkActive() || !IsServer)
+            {
+                return;
+            }
+
+            syncedExternalAttackerNetworkObjectId.Value = 0;
+            syncedPovMode.Value = (int)PovMode.Main;
+        }
+
+        private void SetLocalPovMode(PovMode mode)
+        {
+            localPovMode = mode;
+
+            if (!IsNetworkActive() || !IsOwner)
+            {
+                return;
+            }
+
+            RequestSetPovModeServerRpc((int)mode);
+        }
+
+        [ServerRpc]
+        private void RequestSetPovModeServerRpc(int mode, ServerRpcParams serverRpcParams = default)
+        {
+            PovMode safe = System.Enum.IsDefined(typeof(PovMode), mode) ? (PovMode)mode : PovMode.Main;
+            syncedPovMode.Value = (int)safe;
+            if (safe != PovMode.External)
+            {
+                syncedExternalAttackerNetworkObjectId.Value = 0;
+            }
+        }
+
+        private void ApplyLocalPovCameraState()
+        {
+            bool local = IsLocallyControlled();
+            RefreshPovCameraReferences();
+
+            if (mainPovCamera != null)
+            {
+                mainPovCamera.enabled = local;
+            }
+            if (ragdollPovCamera != null)
+            {
+                ragdollPovCamera.enabled = false;
+            }
+
+            AudioListener mainListener = mainPovCamera != null ? mainPovCamera.GetComponent<AudioListener>() : null;
+            if (mainListener != null)
+            {
+                mainListener.enabled = local;
+            }
+
+            AudioListener ragdollListener = ragdollPovCamera != null ? ragdollPovCamera.GetComponent<AudioListener>() : null;
             if (ragdollListener != null)
             {
                 ragdollListener.enabled = false;
@@ -1317,6 +1459,16 @@ namespace WalaPaNameHehe
             if (!next && ragdollController != null)
             {
                 ragdollController.ResetRagdoll();
+            }
+
+            if (!next)
+            {
+                localPovMode = PovMode.Main;
+                if (IsNetworkActive() && IsServer)
+                {
+                    syncedExternalAttackerNetworkObjectId.Value = 0;
+                    syncedPovMode.Value = (int)PovMode.Main;
+                }
             }
         }
 
