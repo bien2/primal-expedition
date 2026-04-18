@@ -158,6 +158,19 @@ namespace WalaPaNameHehe
             if (localViewAnchor == null)
             {
                 Transform camera = transform.Find("MainCamera");
+                if (camera == null)
+                {
+                    Transform[] children = GetComponentsInChildren<Transform>(true);
+                    for (int i = 0; i < children.Length; i++)
+                    {
+                        Transform t = children[i];
+                        if (t != null && t.name == "MainCamera")
+                        {
+                            camera = t;
+                            break;
+                        }
+                    }
+                }
                 if (camera != null)
                 {
                     Transform foundLocalHolder = camera.Find("ItemHolder");
