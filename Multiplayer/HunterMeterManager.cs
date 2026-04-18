@@ -293,6 +293,42 @@ namespace WalaPaNameHehe.Multiplayer
             }
         }
 
+        public void ResetForNewRun()
+        {
+            if (!CoopGuard.IsServerOrOffline())
+            {
+                return;
+            }
+
+            nextApexSeenTime.Clear();
+            nextRoamerEncounterTime.Clear();
+            storedMeterByClient.Clear();
+
+            huntPlanned = false;
+            huntTargetClientId = ulong.MaxValue;
+            runInitialized = false;
+            isNightRun = false;
+
+            PlayerMovement[] players = FindObjectsByType<PlayerMovement>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < players.Length; i++)
+            {
+                PlayerMovement player = players[i];
+                if (player == null)
+                {
+                    continue;
+                }
+
+                player.ServerResetHunterMeter();
+                storedMeterByClient[player.OwnerClientId] = 0f;
+            }
+
+            if (IsServer)
+            {
+                syncedHuntPlanned.Value = false;
+                syncedHuntTargetClientId.Value = ulong.MaxValue;
+            }
+        }
+
         private void SelectHuntTarget(bool night)
         {
             huntPlanned = false;

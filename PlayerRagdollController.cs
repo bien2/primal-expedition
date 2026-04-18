@@ -241,18 +241,23 @@ namespace WalaPaNameHehe
                 EnsureGetUpCameraOverride();
             }
 
-            if (cameraPivot != null && headTarget != null)
-            {
-                Vector3 targetPos = headTarget.position;
-                int ignoreMask = LayerMask.GetMask("Player");
-                int groundMask = ~ignoreMask;
-                Vector3 rayStart = targetPos + Vector3.up * 0.2f;
-                if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 2f, groundMask, QueryTriggerInteraction.Ignore))
-                {
-                    float minY = hit.point.y + 0.05f;
-                    if (targetPos.y < minY)
-                    {
-                        targetPos.y = minY;
+             if (cameraPivot != null && headTarget != null)
+             {
+                 Vector3 targetPos = headTarget.position;
+                 int groundMask = LayerMask.GetMask("Ground");
+                 if (groundMask == 0)
+                 {
+                     int ignoreMask = LayerMask.GetMask("Player");
+                     groundMask = ~ignoreMask;
+                 }
+
+                 Vector3 rayStart = targetPos + Vector3.up * 2f;
+                 if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 20f, groundMask, QueryTriggerInteraction.Ignore))
+                 {
+                     float minY = hit.point.y + 0.05f;
+                     if (targetPos.y < minY)
+                     {
+                         targetPos.y = minY;
                     }
                 }
 

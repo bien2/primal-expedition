@@ -12,7 +12,6 @@ namespace WalaPaNameHehe
         {
             Passive,
             Neutral,
-            Roamer
         }
 
         [System.Serializable]
@@ -32,6 +31,17 @@ namespace WalaPaNameHehe
 
         [Header("Spawn Mode")]
         [SerializeField] private bool allowOfflineSpawn = true;
+
+        [Header("Day Scaling (Passive/Neutral)")]
+        [Header("Day 2 Increase (%)")]
+        [Range(0f, 2f)] [SerializeField] private float day2MinIncrease = 0.10f;
+        [Range(0f, 2f)] [SerializeField] private float day2MaxIncrease = 0.10f;
+        [Header("Day 3 Increase (%)")]
+        [Range(0f, 2f)] [SerializeField] private float day3MinIncrease = 0.30f;
+        [Range(0f, 2f)] [SerializeField] private float day3MaxIncrease = 0.30f;
+        [Header("Day 4+ Increase (%)")]
+        [Range(0f, 2f)] [SerializeField] private float day4MinIncrease = 0.65f;
+        [Range(0f, 2f)] [SerializeField] private float day4MaxIncrease = 0.65f;
 
         [Header("Spawn Spacing")]
         [SerializeField] private bool useAutoSpacing = true;
@@ -64,6 +74,25 @@ namespace WalaPaNameHehe
         [SerializeField] private bool hunterForceHuntTest;
         [SerializeField] private bool hunterForceHuntPlayCues = true;
 
+        [Header("Roamer")]
+        [SerializeField] private GameObject[] roamerPrefabs;
+        [Min(0)] [SerializeField] private int roamerMinCount = 1;
+        [Min(0)] [SerializeField] private int roamerMaxCount = 2;
+
+        [System.Serializable]
+        public class RoamerExtractThreshold
+        {
+            [Min(1)] public int day = 1;
+            [Min(1)] public int extractsMin = 3;
+            [Min(1)] public int extractsMax = 5;
+        }
+
+        [Header("Roamer Extract Thresholds")]
+        [SerializeField] private RoamerExtractThreshold[] roamerExtractThresholds = new RoamerExtractThreshold[]
+        {
+            new RoamerExtractThreshold { day = 1, extractsMin = 3, extractsMax = 5 }
+        };
+
         [Header("Apex")]
         [SerializeField] private GameObject apexPrefab;
         [SerializeField] private Transform apexSpawnPointRoot;
@@ -93,6 +122,7 @@ namespace WalaPaNameHehe
         private int targetApexSamples = -1;
         private bool apexSpawnedThisDay;
         private readonly List<GameObject> spawnedApex = new();
+        private readonly List<GameObject> spawnedRoamers = new();
         private bool spawnLoopsStarted;
         private readonly HashSet<int> warnedScenePrefabInstanceIds = new();
 
@@ -253,6 +283,16 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            int day = 1;
+            WalaPaNameHehe.Multiplayer.GameManager manager = WalaPaNameHehe.Multiplayer.GameManager.Instance;
+            if (manager != null)
+            {
+                day = Mathf.Max(1, manager.currentDay);
+            }
+
+            bool hasRoamerSettings = roamerPrefabs != null && roamerPrefabs.Length > 0 && Mathf.Max(0, roamerMaxCount) > 0;
+            bool allowRoamerSpawns = hasRoamerSettings && ShouldAllowRoamerSpawns(day, manager);
+
             for (int i = 0; i < spawnConfigs.Length; i++)
             {
                 DinoSpawnConfig config = spawnConfigs[i];
@@ -262,6 +302,31 @@ namespace WalaPaNameHehe
 
                 int minCount = Mathf.Max(0, config.minCount);
                 int maxCount = Mathf.Max(minCount, config.maxCount);
+
+                if (config.type == DinoType.Passive || config.type == DinoType.Neutral)
+                {
+                    int clampedDay = Mathf.Clamp(day, 1, 4);
+                    float minIncrease = clampedDay switch
+                    {
+                        2 => Mathf.Max(0f, day2MinIncrease),
+                        3 => Mathf.Max(0f, day3MinIncrease),
+                        4 => Mathf.Max(0f, day4MinIncrease),
+                        _ => 0f,
+                    };
+                    float maxIncrease = clampedDay switch
+                    {
+                        2 => Mathf.Max(0f, day2MaxIncrease),
+                        3 => Mathf.Max(0f, day3MaxIncrease),
+                        4 => Mathf.Max(0f, day4MaxIncrease),
+                        _ => 0f,
+                    };
+
+                    int scaledMin = Mathf.RoundToInt(minCount * (1f + minIncrease));
+                    int scaledMax = Mathf.RoundToInt(maxCount * (1f + maxIncrease));
+
+                    minCount = Mathf.Max(0, scaledMin);
+                    maxCount = Mathf.Max(minCount, scaledMax);
+                }
                 int targetCount = Random.Range(minCount, maxCount + 1);
 
                 if (list.Count >= targetCount)
@@ -311,6 +376,214 @@ namespace WalaPaNameHehe
                     list.Add(instance);
                 }
             }
+
+            bool spawnedRoamerThisRun = false;
+            if (allowRoamerSpawns)
+            {
+                spawnedRoamerThisRun = SpawnRoamers();
+            }
+
+            if (spawnedRoamerThisRun)
+            {
+                ConsumeRoamerSpawnDay(day, manager);
+            }
+        }
+
+        private bool SpawnRoamers()
+        {
+            if (roamerPrefabs == null || roamerPrefabs.Length == 0)
+            {
+                return false;
+            }
+
+            int minCount = Mathf.Max(0, roamerMinCount);
+            int maxCount = Mathf.Max(minCount, roamerMaxCount);
+            int targetCount = Random.Range(minCount, maxCount + 1);
+            if (targetCount <= 0)
+            {
+                return false;
+            }
+
+            CleanupDestroyed(spawnedRoamers);
+            if (spawnedRoamers.Count >= targetCount)
+            {
+                return false;
+            }
+
+            int toSpawn = targetCount - spawnedRoamers.Count;
+            bool spawnedAny = false;
+            for (int s = 0; s < toSpawn; s++)
+            {
+                GameObject prefab = GetRandomRoamerPrefab();
+                if (prefab == null)
+                {
+                    break;
+                }
+
+                if (prefab.scene.IsValid())
+                {
+                    WarnScenePrefabReference(prefab, "Roamer");
+                    break;
+                }
+
+                float spacingRadius = GetSpacingRadiusForRoamer(prefab);
+                if (!TryGetSpawnPointWithSpacing(spacingRadius, out Transform spawnPoint))
+                {
+                    break;
+                }
+
+                Vector3 position = GetSpawnPosition(spawnPoint);
+                Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
+                GameObject instance = Instantiate(prefab, position, rotation);
+                if (IsServerActive())
+                {
+                    NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                    if (netObj == null)
+                    {
+                        Debug.LogWarning($"DinoSpawnerManager: Roamer prefab '{prefab.name}' is missing NetworkObject. Destroying spawned instance.");
+                        Destroy(instance);
+                        continue;
+                    }
+                    if (!netObj.IsSpawned)
+                    {
+                        netObj.Spawn(true);
+                    }
+                }
+
+                spawnedRoamers.Add(instance);
+                spawnedAny = true;
+            }
+
+            return spawnedAny;
+        }
+
+        private GameObject GetRandomRoamerPrefab()
+        {
+            if (roamerPrefabs == null || roamerPrefabs.Length == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < roamerPrefabs.Length; i++)
+            {
+                GameObject prefab = roamerPrefabs[Random.Range(0, roamerPrefabs.Length)];
+                if (prefab != null)
+                {
+                    return prefab;
+                }
+            }
+
+            return null;
+        }
+
+        private float GetSpacingRadiusForRoamer(GameObject prefab)
+        {
+            float radius = minSpacingRadius;
+            if (useAutoSpacing)
+            {
+                float prefabRadius = prefab != null ? GetPrefabRadius(prefab) : 0f;
+                radius = Mathf.Max(radius, prefabRadius * spacingMultiplier);
+            }
+
+            if (maxSpacingRadius > 0f)
+            {
+                radius = Mathf.Min(radius, maxSpacingRadius);
+            }
+
+            return Mathf.Max(0f, radius);
+        }
+
+        private bool ShouldAllowRoamerSpawns(int day, WalaPaNameHehe.Multiplayer.GameManager manager)
+        {
+            if (manager == null)
+            {
+                return true;
+            }
+
+            RoamerExtractThreshold rule = GetRoamerRuleForDay(day);
+            if (rule == null)
+            {
+                return true;
+            }
+
+            int nextDay = manager.nextRoamerSpawnDay;
+            if (nextDay <= 0)
+            {
+                int interval = GetRoamerExtractInterval(rule);
+                nextDay = day <= 1 ? interval : day + interval;
+                manager.SetNextRoamerSpawnDay(Mathf.Max(1, nextDay));
+            }
+
+            return day >= manager.nextRoamerSpawnDay;
+        }
+
+        private void ConsumeRoamerSpawnDay(int day, WalaPaNameHehe.Multiplayer.GameManager manager)
+        {
+            if (manager == null)
+            {
+                return;
+            }
+
+            RoamerExtractThreshold rule = GetRoamerRuleForDay(day);
+            if (rule == null)
+            {
+                return;
+            }
+
+            int interval = GetRoamerExtractInterval(rule);
+            int nextDay = day + interval;
+            if (nextDay <= day)
+            {
+                nextDay = day + 1;
+            }
+
+            manager.SetNextRoamerSpawnDay(nextDay);
+        }
+
+        private int GetRoamerExtractInterval(RoamerExtractThreshold rule)
+        {
+            int min = rule != null ? Mathf.Max(1, rule.extractsMin) : 1;
+            int max = rule != null ? Mathf.Max(min, rule.extractsMax) : min;
+            return Random.Range(min, max + 1);
+        }
+
+        private RoamerExtractThreshold GetRoamerRuleForDay(int day)
+        {
+            if (roamerExtractThresholds == null || roamerExtractThresholds.Length == 0)
+            {
+                return null;
+            }
+
+            int safeDay = Mathf.Max(1, day);
+            RoamerExtractThreshold best = null;
+            for (int i = 0; i < roamerExtractThresholds.Length; i++)
+            {
+                RoamerExtractThreshold rule = roamerExtractThresholds[i];
+                if (rule == null)
+                {
+                    continue;
+                }
+
+                if (rule.day <= safeDay && (best == null || rule.day > best.day))
+                {
+                    best = rule;
+                }
+            }
+
+            if (best != null)
+            {
+                return best;
+            }
+
+            for (int i = 0; i < roamerExtractThresholds.Length; i++)
+            {
+                if (roamerExtractThresholds[i] != null)
+                {
+                    return roamerExtractThresholds[i];
+                }
+            }
+
+            return null;
         }
 
         private void Update()
@@ -803,7 +1076,6 @@ namespace WalaPaNameHehe
             {
                 DinoType.Passive => DinoAI.AggressionType.Passive,
                 DinoType.Neutral => DinoAI.AggressionType.Neutral,
-                DinoType.Roamer => DinoAI.AggressionType.Roamer,
                 _ => ai.aggressionType
             };
         }
@@ -873,6 +1145,14 @@ namespace WalaPaNameHehe
                     {
                         RegisterNetworkPrefab(nm, config.prefabs[p], $"SpawnConfig[{i}] {config.type}", canAdd);
                     }
+                }
+            }
+
+            if (roamerPrefabs != null)
+            {
+                for (int p = 0; p < roamerPrefabs.Length; p++)
+                {
+                    RegisterNetworkPrefab(nm, roamerPrefabs[p], "Roamer", canAdd);
                 }
             }
 
