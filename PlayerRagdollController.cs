@@ -53,6 +53,13 @@ namespace WalaPaNameHehe
         private Quaternion cachedCameraLocalRot;
         private bool hasGetUpCameraOverride;
         private bool hasGetUpSuppression;
+        private bool wasFollowingCamera;
+        [Header("Camera Return")]
+        [SerializeField] private float cameraPivotReturnSeconds = 0.15f;
+        private bool isReturningCameraPivot;
+        private float cameraPivotReturnStartTime;
+        private Vector3 cameraPivotReturnFromLocalPos;
+        private Quaternion cameraPivotReturnFromLocalRot;
 
         private void Awake()
         {
@@ -176,8 +183,24 @@ namespace WalaPaNameHehe
             bool followCamera = isHolding || isDownedRagdoll || followGetUp;
             if (!followCamera)
             {
+                if (wasFollowingCamera)
+                {
+                    RestoreGetUpCameraOverride();
+                    ApplyGetUpSuppression(false);
+                    BeginCameraPivotReturn();
+                    wasFollowingCamera = false;
+                }
+
+                if (!isReturningCameraPivot)
+                {
+                    return;
+                }
+
+                UpdateCameraPivotReturn();
                 return;
             }
+            wasFollowingCamera = true;
+            isReturningCameraPivot = false;
 
             if (playerMovement == null)
             {
@@ -200,12 +223,12 @@ namespace WalaPaNameHehe
                 {
                     cameraPivot = pivot;
                 }
-                if (cameraPivot != null && !hasStoredCameraPivot)
-                {
-                    cameraPivotLocalPos = cameraPivot.localPosition;
-                    cameraPivotLocalRot = cameraPivot.localRotation;
-                    hasStoredCameraPivot = true;
-                }
+            }
+            if (cameraPivot != null && !hasStoredCameraPivot)
+            {
+                cameraPivotLocalPos = cameraPivot.localPosition;
+                cameraPivotLocalRot = cameraPivot.localRotation;
+                hasStoredCameraPivot = true;
             }
 
             Transform headTarget = null;
@@ -240,6 +263,41 @@ namespace WalaPaNameHehe
             if (isBlendingGetUp)
             {
                 BlendGetUpPose();
+            }
+        }
+
+        private void BeginCameraPivotReturn()
+        {
+            if (cameraPivot == null || !hasStoredCameraPivot)
+            {
+                isReturningCameraPivot = false;
+                return;
+            }
+
+            cameraPivotReturnFromLocalPos = cameraPivot.localPosition;
+            cameraPivotReturnFromLocalRot = cameraPivot.localRotation;
+            cameraPivotReturnStartTime = Time.unscaledTime;
+            isReturningCameraPivot = true;
+        }
+
+        private void UpdateCameraPivotReturn()
+        {
+            if (!isReturningCameraPivot || cameraPivot == null || !hasStoredCameraPivot)
+            {
+                isReturningCameraPivot = false;
+                return;
+            }
+
+            float duration = Mathf.Max(0.0001f, cameraPivotReturnSeconds);
+            float t = Mathf.Clamp01((Time.unscaledTime - cameraPivotReturnStartTime) / duration);
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+
+            cameraPivot.localPosition = Vector3.Lerp(cameraPivotReturnFromLocalPos, cameraPivotLocalPos, eased);
+            cameraPivot.localRotation = Quaternion.Slerp(cameraPivotReturnFromLocalRot, cameraPivotLocalRot, eased);
+
+            if (t >= 1f)
+            {
+                isReturningCameraPivot = false;
             }
         }
 
@@ -648,9 +706,6 @@ namespace WalaPaNameHehe
         {
             if (animator == null || string.IsNullOrWhiteSpace(getUpStateName))
             {
-                RestoreCameraPivot();
-                RestoreGetUpCameraOverride();
-                ApplyGetUpSuppression(false);
                 return false;
             }
 
@@ -659,11 +714,23 @@ namespace WalaPaNameHehe
             {
                 return true;
             }
-
-            RestoreCameraPivot();
-            RestoreGetUpCameraOverride();
-            ApplyGetUpSuppression(false);
             return false;
+        }
+
+        public bool IsInGetUpState()
+        {
+            if (animator == null || string.IsNullOrWhiteSpace(getUpStateName))
+            {
+                return false;
+            }
+
+            AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(0);
+            return stateInfo.IsName(getUpStateName);
+        }
+
+        public bool IsGetUpTransitionActive()
+        {
+            return isBlendingGetUp || hasGetUpCameraOverride || hasGetUpSuppression;
         }
 
         private void BeginGetUpBlend()
@@ -788,8 +855,8 @@ namespace WalaPaNameHehe
             if (!hasGetUpCameraOverride)
             {
                 cachedCameraParent = cameraPivot.parent;
-                cachedCameraLocalPos = cameraPivot.localPosition;
-                cachedCameraLocalRot = cameraPivot.localRotation;
+                cachedCameraLocalPos = hasStoredCameraPivot ? cameraPivotLocalPos : cameraPivot.localPosition;
+                cachedCameraLocalRot = hasStoredCameraPivot ? cameraPivotLocalRot : cameraPivot.localRotation;
                 hasGetUpCameraOverride = true;
             }
 
@@ -1110,7 +1177,6 @@ namespace WalaPaNameHehe
 
             cameraPivot.localPosition = cameraPivotLocalPos;
             cameraPivot.localRotation = cameraPivotLocalRot;
-            hasStoredCameraPivot = false;
         }
     }
 }

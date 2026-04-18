@@ -145,6 +145,9 @@ namespace WalaPaNameHehe
         private Camera playerCamera;
         private float baseFov;
         private bool hasBaseFov;
+        [Header("POV Cameras")]
+        [SerializeField] private Camera mainPovCamera;
+        [SerializeField] private Camera ragdollPovCamera;
         private float nextFootstepTime;
         private float nextHunterTargetSoundTime;
         private readonly Collider[] isolationHits = new Collider[32];
@@ -937,6 +940,81 @@ namespace WalaPaNameHehe
             }
 
             return playerCamera != null;
+        }
+
+        private void RefreshPovCameraReferences()
+        {
+            if (mainPovCamera == null)
+            {
+                mainPovCamera = playerCamera != null ? playerCamera : GetComponentInChildren<Camera>(true);
+            }
+
+            if (ragdollPovCamera == null && cameraPivot != null)
+            {
+                Camera[] cams = cameraPivot.GetComponentsInChildren<Camera>(true);
+                for (int i = 0; i < cams.Length; i++)
+                {
+                    Camera cam = cams[i];
+                    if (cam != null && cam != mainPovCamera)
+                    {
+                        ragdollPovCamera = cam;
+                        break;
+                    }
+                }
+            }
+        }
+
+        public void SetRagdollPovActive(bool active)
+        {
+            if (!IsLocallyControlled())
+            {
+                return;
+            }
+
+            RefreshPovCameraReferences();
+
+            AudioListener mainListener = mainPovCamera != null ? mainPovCamera.GetComponent<AudioListener>() : null;
+            AudioListener ragdollListener = ragdollPovCamera != null ? ragdollPovCamera.GetComponent<AudioListener>() : null;
+
+            if (active)
+            {
+                if (ragdollPovCamera != null)
+                {
+                    ragdollPovCamera.enabled = true;
+                }
+                if (ragdollListener != null)
+                {
+                    ragdollListener.enabled = true;
+                }
+
+                if (mainPovCamera != null)
+                {
+                    mainPovCamera.enabled = false;
+                }
+                if (mainListener != null)
+                {
+                    mainListener.enabled = false;
+                }
+                return;
+            }
+
+            if (mainPovCamera != null)
+            {
+                mainPovCamera.enabled = true;
+            }
+            if (mainListener != null)
+            {
+                mainListener.enabled = true;
+            }
+
+            if (ragdollPovCamera != null)
+            {
+                ragdollPovCamera.enabled = false;
+            }
+            if (ragdollListener != null)
+            {
+                ragdollListener.enabled = false;
+            }
         }
 
         private void ResolveNeckReference()

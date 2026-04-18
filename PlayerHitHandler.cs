@@ -627,6 +627,11 @@ namespace WalaPaNameHehe
 
         private IEnumerator DropRagdollRoutine(float durationSeconds)
         {
+            if (playerMovement != null)
+            {
+                playerMovement.SetRagdollPovActive(true);
+            }
+
             ragdollController.SetDownedRagdoll(true);
             yield return new WaitForSeconds(durationSeconds);
             yield return null;
@@ -643,6 +648,22 @@ namespace WalaPaNameHehe
                 SnapRootToRagdollOnly();
             }
             ragdollController.SetDownedRagdoll(false);
+
+            float getUpStart = Time.unscaledTime;
+            const float maxGetUpWaitSeconds = 6f;
+            while (ragdollController != null &&
+                   (ragdollController.IsInGetUpState() || ragdollController.IsGetUpTransitionActive()) &&
+                   Time.unscaledTime - getUpStart < maxGetUpWaitSeconds)
+            {
+                yield return null;
+            }
+            // Let PlayerRagdollController run a LateUpdate tick to restore camera pivot after getup exits.
+            yield return null;
+
+            if (playerMovement != null)
+            {
+                playerMovement.SetRagdollPovActive(false);
+            }
             dropRagdollRoutine = null;
         }
 
@@ -862,7 +883,73 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            transform.position = grabHoldPoint.position;
+            Vector3 target = grabHoldPoint.position;
+
+            if (playerMovement == null)
+            {
+                transform.position = target;
+                return;
+            }
+
+            CapsuleCollider capsule = playerMovement.GetCapsuleCollider();
+            if (capsule == null)
+            {
+                transform.position = target;
+                return;
+            }
+
+            if (TryClampGrabHoldToGround(target, capsule, out Vector3 clampedPosition))
+            {
+                transform.position = clampedPosition;
+                return;
+            }
+
+            transform.position = target;
+        }
+
+        private bool TryClampGrabHoldToGround(Vector3 holdPosition, CapsuleCollider capsule, out Vector3 clampedPosition)
+        {
+            clampedPosition = holdPosition;
+
+            int ignoreMask = LayerMask.GetMask("Player");
+            int groundMask = ~ignoreMask;
+
+            Vector3 rayStart = new Vector3(holdPosition.x, holdPosition.y + 2f, holdPosition.z);
+            if (!Physics.Raycast(rayStart, Vector3.down, out RaycastHit groundHit, 5f, groundMask, QueryTriggerInteraction.Ignore))
+            {
+                return false;
+            }
+
+            // Only clamp if the hold point is below (or effectively inside) the ground.
+            if (holdPosition.y >= groundHit.point.y + 0.02f)
+            {
+                return false;
+            }
+
+            float scaleX = Mathf.Abs(transform.lossyScale.x);
+            float scaleY = Mathf.Abs(transform.lossyScale.y);
+            float scaleZ = Mathf.Abs(transform.lossyScale.z);
+            float radius = capsule.radius * Mathf.Max(scaleX, scaleZ);
+            float halfHeight = Mathf.Max(radius, capsule.height * scaleY * 0.5f);
+            float cylinderHalf = Mathf.Max(0f, halfHeight - radius);
+            Vector3 centerOffset = transform.TransformPoint(capsule.center) - transform.position;
+
+            Vector3 startCenter = new Vector3(
+                holdPosition.x,
+                groundHit.point.y + halfHeight + 0.5f,
+                holdPosition.z) + new Vector3(centerOffset.x, 0f, centerOffset.z);
+
+            Vector3 p1 = startCenter + Vector3.up * cylinderHalf;
+            Vector3 p2 = startCenter - Vector3.up * cylinderHalf;
+            if (Physics.CapsuleCast(p1, p2, radius, Vector3.down, out RaycastHit hit, 10f, groundMask, QueryTriggerInteraction.Ignore))
+            {
+                Vector3 desiredCenter = startCenter + Vector3.down * hit.distance;
+                clampedPosition = desiredCenter - centerOffset;
+                return true;
+            }
+
+            clampedPosition = new Vector3(holdPosition.x, groundHit.point.y + 0.05f, holdPosition.z);
+            return true;
         }
 
         private static Transform FindChildByPath(Transform root, string path)
