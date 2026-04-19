@@ -1036,6 +1036,12 @@ namespace WalaPaNameHehe
 
             if (active)
             {
+                if (mainPovCamera != null && ragdollPovCamera != null)
+                {
+                    ragdollPovCamera.transform.localPosition = mainPovCamera.transform.localPosition;
+                    ragdollPovCamera.transform.localRotation = mainPovCamera.transform.localRotation;
+                }
+
                 if (ragdollPovCamera != null)
                 {
                     ragdollPovCamera.enabled = true;
@@ -1056,6 +1062,43 @@ namespace WalaPaNameHehe
 
                 SetLocalPovMode(PovMode.Ragdoll);
                 return;
+            }
+
+            if (mainPovCamera != null && ragdollPovCamera != null)
+            {
+                mainPovCamera.transform.localPosition = ragdollPovCamera.transform.localPosition;
+                mainPovCamera.transform.localRotation = ragdollPovCamera.transform.localRotation;
+            }
+
+            if (ragdollPovCamera != null)
+            {
+                Vector3 forward = ragdollPovCamera.transform.forward;
+                Vector3 flatForward = new Vector3(forward.x, 0f, forward.z);
+                if (flatForward.sqrMagnitude > 0.0001f)
+                {
+                    float yawAngle = Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg;
+                    transform.rotation = Quaternion.Euler(0f, yawAngle, 0f);
+
+                    Quaternion yawRot = Quaternion.Euler(0f, yawAngle, 0f);
+                    Vector3 localForward = Quaternion.Inverse(yawRot) * forward;
+                    float pitchAngle = -Mathf.Atan2(localForward.y, localForward.z) * Mathf.Rad2Deg;
+                    pitch = Mathf.Clamp(pitchAngle, minPitch, maxPitch);
+
+                    if (cameraPivot != null)
+                    {
+                        cameraPivot.localEulerAngles = new Vector3(pitch, 0f, 0f);
+                    }
+
+                    if (networkPitchPivot != null)
+                    {
+                        networkPitchPivot.localEulerAngles = new Vector3(pitch, 0f, 0f);
+                    }
+
+                    if (IsNetworkActive() && IsOwner)
+                    {
+                        syncedPitch.Value = pitch;
+                    }
+                }
             }
 
             if (mainPovCamera != null)

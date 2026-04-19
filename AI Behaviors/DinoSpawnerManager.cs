@@ -222,7 +222,7 @@ namespace WalaPaNameHehe
 
             if (despawnCount > 0)
             {
-                SessionHud.PostLog("despawned apex");
+                PostSpawnLog("despawned apex");
             }
         }
 
@@ -646,7 +646,7 @@ namespace WalaPaNameHehe
                 int removedCount = beforeCleanupCount - list.Count;
                 if (config.type != DinoType.Passive && removedCount > 0)
                 {
-                    SessionHud.PostLog($"despawned {config.type.ToString().ToLowerInvariant()} - {removedCount}");
+                    PostSpawnLog($"despawned {config.type.ToString().ToLowerInvariant()} - {removedCount}");
                 }
 
                 int minCount = Mathf.Max(0, config.minCount);
@@ -744,7 +744,7 @@ namespace WalaPaNameHehe
                         continue;
                     }
 
-                    SessionHud.PostLog($"spawned {kvp.Key.ToString().ToLowerInvariant()} - {kvp.Value}");
+                    PostSpawnLog($"spawned {kvp.Key.ToString().ToLowerInvariant()} - {kvp.Value}");
                 }
             }
 
@@ -772,7 +772,7 @@ namespace WalaPaNameHehe
             int removedCount = beforeCleanupCount - spawnedRoamers.Count;
             if (removedCount > 0)
             {
-                SessionHud.PostLog($"despawned roamer - {removedCount}");
+                PostSpawnLog($"despawned roamer - {removedCount}");
             }
 
             GameObject prefab = GetRandomRoamerPrefab();
@@ -812,7 +812,7 @@ namespace WalaPaNameHehe
             }
 
             spawnedRoamers.Add(instance);
-            SessionHud.PostLog("spawned roamer");
+            PostSpawnLog("spawned roamer");
             return true;
         }
 
@@ -870,7 +870,7 @@ namespace WalaPaNameHehe
                 return false;
             }
 
-            return manager.collectedSamples >= nextRoamerSampleTarget;
+            return manager.roamerSamplesBank >= nextRoamerSampleTarget;
         }
 
         private void ConsumeRoamerSpawn(WalaPaNameHehe.Multiplayer.GameManager manager)
@@ -880,7 +880,7 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            manager.ResetCollectedSamples();
+            manager.ConsumeRoamerSamples(nextRoamerSampleTarget);
             nextRoamerSampleTarget = GetRoamerTargetSamples(trackedRoamerDay);
         }
 
@@ -1050,7 +1050,7 @@ namespace WalaPaNameHehe
 
             ConfigurePlunderer(instance);
             spawnedPlunderer = instance;
-            SessionHud.PostLog("spawned plunderer");
+            PostSpawnLog("spawned plunderer");
         }
 
         private void SpawnHunter()
@@ -1129,7 +1129,7 @@ namespace WalaPaNameHehe
             hunterSpawnPosition = position;
             hunterSpawnRotation = rotation;
             hasHunterSpawnLocation = true;
-            SessionHud.PostLog("spawned hunter");
+            PostSpawnLog("spawned hunter");
         }
 
         public bool TryGetHunterSpawnLocation(GameObject hunter, out Vector3 position, out Quaternion rotation)
@@ -1176,7 +1176,7 @@ namespace WalaPaNameHehe
 
             spawnedHunter = null;
             hasHunterSpawnLocation = false;
-            SessionHud.PostLog("despawned hunter");
+            PostSpawnLog("despawned hunter");
         }
 
         private Transform GetHunterSpawnPoint()
@@ -1226,13 +1226,13 @@ namespace WalaPaNameHehe
             }
 
             spawnedApex.Add(instance);
-            SessionHud.PostLog("spawned apex");
+            PostSpawnLog("spawned apex");
         }
 
         private void OnPlundererDespawned(float nextSpawnTime)
         {
             nextPlundererSpawnTime = nextSpawnTime;
-            SessionHud.PostLog("Plunderer Flee");
+            PostSpawnLog("Plunderer Flee");
         }
 
         private void ScheduleNextPlundererSpawn()
@@ -1839,6 +1839,23 @@ namespace WalaPaNameHehe
                     Gizmos.DrawWireSphere(point.position, bestRadius);
                 }
             }
+        }
+
+        private static void PostSpawnLog(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            WalaPaNameHehe.Multiplayer.GameManager gm = WalaPaNameHehe.Multiplayer.GameManager.Instance;
+            if (gm != null)
+            {
+                gm.BroadcastHudLog(message);
+                return;
+            }
+
+            SessionHud.PostLog(message);
         }
     }
 }
