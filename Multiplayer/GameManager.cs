@@ -70,6 +70,7 @@ namespace WalaPaNameHehe.Multiplayer
         private readonly NetworkVariable<int> networkCollectedSamples = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkCollectedSamplesThisRun = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkTotalSamplesCollected = new(writePerm: NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<int> networkRoamerSamplesBank = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkNextRoamerSpawnDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<bool> networkIsExtractionAvailable = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<float> networkExtractionTimeRemaining = new(writePerm: NetworkVariableWritePermission.Server);
@@ -80,6 +81,7 @@ namespace WalaPaNameHehe.Multiplayer
         private int localCollectedSamples;
         private int localCollectedSamplesThisRun;
         private int localTotalSamplesCollected;
+        private int localRoamerSamplesBank;
         private int localNextRoamerSpawnDay;
         private bool localIsExtractionAvailable;
         private float localExtractionTimeRemaining;
@@ -99,6 +101,7 @@ namespace WalaPaNameHehe.Multiplayer
         public int collectedSamples => UseNetworkState ? networkCollectedSamples.Value : localCollectedSamples;
         public int collectedSamplesThisRun => UseNetworkState ? networkCollectedSamplesThisRun.Value : localCollectedSamplesThisRun;
         public int totalSamplesCollected => UseNetworkState ? networkTotalSamplesCollected.Value : localTotalSamplesCollected;
+        public int roamerSamplesBank => UseNetworkState ? networkRoamerSamplesBank.Value : localRoamerSamplesBank;
         public int nextRoamerSpawnDay => UseNetworkState ? networkNextRoamerSpawnDay.Value : localNextRoamerSpawnDay;
         public bool isExtractionAvailable => UseNetworkState ? networkIsExtractionAvailable.Value : localIsExtractionAvailable;
         public float extractionTimeRemaining => UseNetworkState ? networkExtractionTimeRemaining.Value : localExtractionTimeRemaining;
@@ -348,6 +351,7 @@ namespace WalaPaNameHehe.Multiplayer
             SetRequiredSamples(GetRequiredSamplesForDay(currentDay));
             SetCollectedSamples(0);
             SetCollectedSamplesThisRun(0);
+            SetRoamerSamplesBank(0);
             SetExtractionAvailable(false);
             SetExtractionTimeRemaining(0f);
             SetState(ExpeditionState.Exploring);
@@ -403,6 +407,7 @@ namespace WalaPaNameHehe.Multiplayer
             SetCollectedSamples(newSampleCount);
             SetCollectedSamplesThisRun(collectedSamplesThisRun + 1);
             SetTotalSamplesCollected(totalSamplesCollected + 1);
+            SetRoamerSamplesBank(roamerSamplesBank + 1);
 
             LogMessage($"Sample collected: {collectedSamples} / {requiredSamples}");
 
@@ -821,6 +826,7 @@ namespace WalaPaNameHehe.Multiplayer
             localCollectedSamples = 0;
             localCollectedSamplesThisRun = 0;
             localTotalSamplesCollected = 0;
+            localRoamerSamplesBank = 0;
             localNextRoamerSpawnDay = 0;
             localIsExtractionAvailable = false;
             localExtractionTimeRemaining = 0f;
@@ -862,6 +868,7 @@ namespace WalaPaNameHehe.Multiplayer
             networkCollectedSamples.Value = localCollectedSamples;
             networkCollectedSamplesThisRun.Value = localCollectedSamplesThisRun;
             networkTotalSamplesCollected.Value = localTotalSamplesCollected;
+            networkRoamerSamplesBank.Value = localRoamerSamplesBank;
             networkNextRoamerSpawnDay.Value = localNextRoamerSpawnDay;
             networkIsExtractionAvailable.Value = localIsExtractionAvailable;
             networkExtractionTimeRemaining.Value = localExtractionTimeRemaining;
@@ -875,6 +882,7 @@ namespace WalaPaNameHehe.Multiplayer
             localCollectedSamples = networkCollectedSamples.Value;
             localCollectedSamplesThisRun = networkCollectedSamplesThisRun.Value;
             localTotalSamplesCollected = networkTotalSamplesCollected.Value;
+            localRoamerSamplesBank = networkRoamerSamplesBank.Value;
             localNextRoamerSpawnDay = networkNextRoamerSpawnDay.Value;
             localIsExtractionAvailable = networkIsExtractionAvailable.Value;
             localExtractionTimeRemaining = networkExtractionTimeRemaining.Value;
@@ -927,6 +935,39 @@ namespace WalaPaNameHehe.Multiplayer
             }
         }
 
+        public void BroadcastHudLog(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            if (!UseNetworkState)
+            {
+                SessionHud.PostLog(message);
+                return;
+            }
+
+            if (!HasAuthority)
+            {
+                return;
+            }
+
+            SessionHud.PostLog(message);
+            BroadcastHudLogClientRpc(message);
+        }
+
+        [ClientRpc]
+        private void BroadcastHudLogClientRpc(string message)
+        {
+            if (IsServer)
+            {
+                return;
+            }
+
+            SessionHud.PostLog(message);
+        }
+
         private void SetCurrentDay(int value)
         {
             if (UseNetworkState)
@@ -977,6 +1018,33 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             localTotalSamplesCollected = safe;
+        }
+
+        private void SetRoamerSamplesBank(int value)
+        {
+            int safe = Mathf.Max(0, value);
+            if (UseNetworkState)
+            {
+                networkRoamerSamplesBank.Value = safe;
+            }
+
+            localRoamerSamplesBank = safe;
+        }
+
+        public void ConsumeRoamerSamples(int amount)
+        {
+            if (UseNetworkState && !IsServer)
+            {
+                return;
+            }
+
+            int consume = Mathf.Max(0, amount);
+            if (consume <= 0)
+            {
+                return;
+            }
+
+            SetRoamerSamplesBank(Mathf.Max(0, roamerSamplesBank - consume));
         }
 
         public void ResetCollectedSamples()

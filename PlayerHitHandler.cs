@@ -637,6 +637,8 @@ namespace WalaPaNameHehe
             }
 
             ragdollController.SetDownedRagdoll(true);
+            ragdollController.AlignAndSnapToGround();
+            SnapRootToRagdollOnly();
             yield return new WaitForSeconds(durationSeconds);
             yield return null;
             yield return null;
