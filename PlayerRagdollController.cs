@@ -156,6 +156,14 @@ namespace WalaPaNameHehe
 
         private void LateUpdate()
         {
+            if (externalCameraActive)
+            {
+                if (externalCamera == null || !externalCamera.isActiveAndEnabled)
+                {
+                    ClearExternalCamera();
+                }
+            }
+
             // No manual positioning; joint keeps the ragdoll attached during hold.
             if (isDownedRagdoll && ragdollRoot != null)
             {

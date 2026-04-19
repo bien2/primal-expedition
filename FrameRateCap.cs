@@ -16,5 +16,10 @@ namespace WalaPaNameHehe
 
             Application.targetFrameRate = Mathf.Max(30, targetFps);
         }
+
+        private void OnValidate()
+        {
+            targetFps = Mathf.Max(30, targetFps);
+        }
     }
 }

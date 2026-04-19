@@ -24,7 +24,9 @@ namespace WalaPaNameHehe.Multiplayer
         [Min(1)] [SerializeField] private int maxLogLines = 12;
 
         [Header("Labels")]
-        [SerializeField] private string bloodSamplesPrefix = "Blood Samples: ";
+        [SerializeField] private string requiredSamplesPrefix = "Bloodsamples Required: ";
+        [SerializeField] private string samplesThisRunPrefix = "Bloodsamples Collected This Run: ";
+        [SerializeField] private string totalSamplesPrefix = "Total Bloodsamples Collected: ";
         [SerializeField] private string hunterMeterPrefix = "Hunter Meter";
         [SerializeField] private string dayPrefix = "Day: ";
         [SerializeField] private string runStatePrefix = "Run: ";
@@ -35,6 +37,8 @@ namespace WalaPaNameHehe.Multiplayer
         [SerializeField] private bool showGameManagerState = true;
         [SerializeField] private bool showKillSelfButton = true;
         [SerializeField] private string killSelfButtonText = "Kill Me";
+        [SerializeField] private bool showGiveBloodSampleButton = true;
+        [SerializeField] private string giveBloodSampleButtonText = "Give Bloodsample";
 
         private BloodSampleSubmitter bloodSampleSubmitter;
         private DayNightTimer dayNightTimer;
@@ -117,15 +121,17 @@ namespace WalaPaNameHehe.Multiplayer
             if (showGameManagerState && gm != null)
             {
                 lines.Add($"{runStatePrefix}{gm.CurrentState}");
-                lines.Add($"{bloodSamplesPrefix}{gm.collectedSamples} / {gm.requiredSamples}");
+                lines.Add($"{requiredSamplesPrefix}{gm.requiredSamples}");
+                lines.Add($"{samplesThisRunPrefix}{gm.collectedSamplesThisRun}");
+                lines.Add($"{totalSamplesPrefix}{gm.totalSamplesCollected}");
                 lines.Add($"{extractionPrefix}{(gm.isExtractionAvailable ? "Yes" : "No")}");
             }
             else
             {
-                // Blood samples
+                // Blood samples (fallback)
                 if (bloodSampleSubmitter != null)
                 {
-                    lines.Add($"{bloodSamplesPrefix}{bloodSampleSubmitter.SharedSubmittedCount}");
+                    lines.Add($"{samplesThisRunPrefix}{bloodSampleSubmitter.SharedSubmittedCount}");
                 }
             }
 
@@ -172,32 +178,41 @@ namespace WalaPaNameHehe.Multiplayer
                 lineY += lineHeight + panelSpacing;
             }
 
-            if (!showKillSelfButton)
+            float buttonsY = lineY + panelSpacing;
+            bool wantsButtons = showKillSelfButton || showGiveBloodSampleButton;
+            PlayerMovement player = wantsButtons ? ResolveLocalPlayer() : null;
+            bool canUseButtons = player != null;
+            if (canUseButtons && NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !player.IsOwner)
             {
-                DrawLogs(x, lineY + panelSpacing);
-                return;
+                canUseButtons = false;
             }
 
-            PlayerMovement player = ResolveLocalPlayer();
-            if (player == null)
+            if (showKillSelfButton && canUseButtons)
             {
-                return;
+                Rect buttonRect = new Rect(x, buttonsY, panelSize.x, Mathf.Max(24f, panelSize.y));
+                GUI.enabled = !player.IsDead;
+                if (GUI.Button(buttonRect, string.IsNullOrWhiteSpace(killSelfButtonText) ? "Kill Me" : killSelfButtonText))
+                {
+                    player.DebugRequestKillSelf();
+                }
+                GUI.enabled = true;
+                buttonsY = buttonRect.yMax + panelSpacing;
             }
 
-            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !player.IsOwner)
+            if (showGiveBloodSampleButton && canUseButtons)
             {
-                return;
+                Rect giveRect = new Rect(x, buttonsY, panelSize.x, Mathf.Max(24f, panelSize.y));
+                if (GUI.Button(giveRect, string.IsNullOrWhiteSpace(giveBloodSampleButtonText) ? "Give Bloodsample" : giveBloodSampleButtonText))
+                {
+                    if (gm != null)
+                    {
+                        gm.DebugGiveBloodSampleToLocalPlayer();
+                    }
+                }
+                buttonsY = giveRect.yMax + panelSpacing;
             }
 
-            Rect buttonRect = new Rect(x, lineY + panelSpacing, panelSize.x, Mathf.Max(24f, panelSize.y));
-            GUI.enabled = !player.IsDead;
-            if (GUI.Button(buttonRect, string.IsNullOrWhiteSpace(killSelfButtonText) ? "Kill Me" : killSelfButtonText))
-            {
-                player.DebugRequestKillSelf();
-            }
-            GUI.enabled = true;
-
-            DrawLogs(x, buttonRect.yMax + panelSpacing);
+            DrawLogs(x, buttonsY);
         }
 
         private void DrawLogs(float x, float y)
