@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 using Unity.Netcode;
+using UnityEngine.Serialization;
+using WalaPaNameHehe.Multiplayer;
 
 namespace WalaPaNameHehe
 {
@@ -53,6 +55,8 @@ namespace WalaPaNameHehe
         [Min(1)] [SerializeField] private int spawnPointSearchAttempts = 20;
         [SerializeField] private bool snapSpawnToNavMesh = true;
         [Min(0f)] [SerializeField] private float navMeshSampleRadius = 2f;
+        [Header("Spawn Loop")]
+        [Min(0.05f)] [SerializeField] private float spawnTickIntervalSeconds = 0.5f;
         [Header("Network Prefabs")]
         [SerializeField] private bool autoRegisterNetworkPrefabs = true;
         [Header("Spawn Gizmos")]
@@ -76,21 +80,22 @@ namespace WalaPaNameHehe
 
         [Header("Roamer")]
         [SerializeField] private GameObject[] roamerPrefabs;
-        [Min(0)] [SerializeField] private int roamerMinCount = 1;
-        [Min(0)] [SerializeField] private int roamerMaxCount = 2;
 
         [System.Serializable]
-        public class RoamerExtractThreshold
+        public class RoamerSampleThreshold
         {
             [Min(1)] public int day = 1;
-            [Min(1)] public int extractsMin = 3;
-            [Min(1)] public int extractsMax = 5;
+            [FormerlySerializedAs("extractsMin")]
+            [Min(0)] public int samplesMin = 3;
+            [FormerlySerializedAs("extractsMax")]
+            [Min(0)] public int samplesMax = 5;
         }
 
-        [Header("Roamer Extract Thresholds")]
-        [SerializeField] private RoamerExtractThreshold[] roamerExtractThresholds = new RoamerExtractThreshold[]
+        [Header("Roamer Sample Thresholds (Blood Samples)")]
+        [FormerlySerializedAs("roamerExtractThresholds")]
+        [SerializeField] private RoamerSampleThreshold[] roamerSampleThresholds = new RoamerSampleThreshold[]
         {
-            new RoamerExtractThreshold { day = 1, extractsMin = 3, extractsMax = 5 }
+            new RoamerSampleThreshold { day = 1, samplesMin = 3, samplesMax = 5 }
         };
 
         [Header("Apex")]
@@ -128,6 +133,9 @@ namespace WalaPaNameHehe
         private float nextPlundererSpawnTime;
         private int trackedApexDay = -1;
         private int targetApexSamples = -1;
+        private int trackedRoamerDay = -1;
+        private int targetRoamerSamples = -1;
+        private bool roamerSpawnedThisDay;
         private bool apexSpawnedThisDay;
         private readonly List<GameObject> spawnedApex = new();
         private readonly List<GameObject> spawnedRoamers = new();
@@ -576,7 +584,12 @@ namespace WalaPaNameHehe
         private IEnumerator SpawnLoop()
         {
             yield return null;
-            TickSpawns();
+
+            while (true)
+            {
+                TickSpawns();
+                yield return new WaitForSeconds(Mathf.Max(0.05f, spawnTickIntervalSeconds));
+            }
         }
 
         private IEnumerator PlundererSpawnLoop()
@@ -615,7 +628,7 @@ namespace WalaPaNameHehe
                 day = Mathf.Max(1, manager.currentDay);
             }
 
-            bool hasRoamerSettings = roamerPrefabs != null && roamerPrefabs.Length > 0 && Mathf.Max(0, roamerMaxCount) > 0;
+            bool hasRoamerSettings = roamerPrefabs != null && roamerPrefabs.Length > 0;
             bool allowRoamerSpawns = hasRoamerSettings && ShouldAllowRoamerSpawns(day, manager);
 
             for (int i = 0; i < spawnConfigs.Length; i++)
@@ -699,6 +712,7 @@ namespace WalaPaNameHehe
                     }
 
                     list.Add(instance);
+                    SessionHud.PostLog($"Spawned {config.type} dino '{prefab.name}'");
                 }
             }
 
@@ -710,7 +724,7 @@ namespace WalaPaNameHehe
 
             if (spawnedRoamerThisRun)
             {
-                ConsumeRoamerSpawnDay(day, manager);
+                ConsumeRoamerSpawn(manager);
             }
         }
 
@@ -721,65 +735,47 @@ namespace WalaPaNameHehe
                 return false;
             }
 
-            int minCount = Mathf.Max(0, roamerMinCount);
-            int maxCount = Mathf.Max(minCount, roamerMaxCount);
-            int targetCount = Random.Range(minCount, maxCount + 1);
-            if (targetCount <= 0)
-            {
-                return false;
-            }
-
             CleanupDestroyed(spawnedRoamers);
-            if (spawnedRoamers.Count >= targetCount)
+
+            GameObject prefab = GetRandomRoamerPrefab();
+            if (prefab == null)
             {
                 return false;
             }
 
-            int toSpawn = targetCount - spawnedRoamers.Count;
-            bool spawnedAny = false;
-            for (int s = 0; s < toSpawn; s++)
+            if (prefab.scene.IsValid())
             {
-                GameObject prefab = GetRandomRoamerPrefab();
-                if (prefab == null)
-                {
-                    break;
-                }
-
-                if (prefab.scene.IsValid())
-                {
-                    WarnScenePrefabReference(prefab, "Roamer");
-                    break;
-                }
-
-                float spacingRadius = GetSpacingRadiusForRoamer(prefab);
-                if (!TryGetSpawnPointWithSpacing(spacingRadius, out Transform spawnPoint))
-                {
-                    break;
-                }
-
-                Vector3 position = GetSpawnPosition(spawnPoint);
-                Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
-                GameObject instance = Instantiate(prefab, position, rotation);
-                if (IsServerActive())
-                {
-                    NetworkObject netObj = instance.GetComponent<NetworkObject>();
-                    if (netObj == null)
-                    {
-                        Debug.LogWarning($"DinoSpawnerManager: Roamer prefab '{prefab.name}' is missing NetworkObject. Destroying spawned instance.");
-                        Destroy(instance);
-                        continue;
-                    }
-                    if (!netObj.IsSpawned)
-                    {
-                        netObj.Spawn(true);
-                    }
-                }
-
-                spawnedRoamers.Add(instance);
-                spawnedAny = true;
+                WarnScenePrefabReference(prefab, "Roamer");
+                return false;
             }
 
-            return spawnedAny;
+            float spacingRadius = GetSpacingRadiusForRoamer(prefab);
+            if (!TryGetSpawnPointWithSpacing(spacingRadius, out Transform spawnPoint))
+            {
+                return false;
+            }
+
+            Vector3 position = GetSpawnPosition(spawnPoint);
+            Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
+            GameObject instance = Instantiate(prefab, position, rotation);
+            if (IsServerActive())
+            {
+                NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                if (netObj == null)
+                {
+                    Debug.LogWarning($"DinoSpawnerManager: Roamer prefab '{prefab.name}' is missing NetworkObject. Destroying spawned instance.");
+                    Destroy(instance);
+                    return false;
+                }
+                if (!netObj.IsSpawned)
+                {
+                    netObj.Spawn(true);
+                }
+            }
+
+            spawnedRoamers.Add(instance);
+            SessionHud.PostLog($"Spawned Roamer '{prefab.name}'");
+            return true;
         }
 
         private GameObject GetRandomRoamerPrefab()
@@ -825,65 +821,62 @@ namespace WalaPaNameHehe
                 return true;
             }
 
-            RoamerExtractThreshold rule = GetRoamerRuleForDay(day);
-            if (rule == null)
+            if (trackedRoamerDay != day)
             {
-                return true;
+                trackedRoamerDay = day;
+                roamerSpawnedThisDay = false;
+                targetRoamerSamples = GetRoamerTargetSamples(day);
             }
 
-            int nextDay = manager.nextRoamerSpawnDay;
-            if (nextDay <= 0)
+            if (roamerSpawnedThisDay)
             {
-                int interval = GetRoamerExtractInterval(rule);
-                nextDay = day <= 1 ? interval : day + interval;
-                manager.SetNextRoamerSpawnDay(Mathf.Max(1, nextDay));
+                return false;
             }
 
-            return day >= manager.nextRoamerSpawnDay;
+            if (targetRoamerSamples < 0)
+            {
+                return false;
+            }
+
+            return manager.collectedSamples >= targetRoamerSamples;
         }
 
-        private void ConsumeRoamerSpawnDay(int day, WalaPaNameHehe.Multiplayer.GameManager manager)
+        private void ConsumeRoamerSpawn(WalaPaNameHehe.Multiplayer.GameManager manager)
         {
             if (manager == null)
             {
                 return;
             }
 
-            RoamerExtractThreshold rule = GetRoamerRuleForDay(day);
-            if (rule == null)
-            {
-                return;
-            }
-
-            int interval = GetRoamerExtractInterval(rule);
-            int nextDay = day + interval;
-            if (nextDay <= day)
-            {
-                nextDay = day + 1;
-            }
-
-            manager.SetNextRoamerSpawnDay(nextDay);
+            roamerSpawnedThisDay = true;
+            manager.ResetCollectedSamples();
         }
 
-        private int GetRoamerExtractInterval(RoamerExtractThreshold rule)
+        private int GetRoamerTargetSamples(int day)
         {
-            int min = rule != null ? Mathf.Max(1, rule.extractsMin) : 1;
-            int max = rule != null ? Mathf.Max(min, rule.extractsMax) : min;
+            RoamerSampleThreshold rule = GetRoamerRuleForDay(day);
+            if (rule == null)
+            {
+                return -1;
+            }
+
+            int min = Mathf.Max(0, rule.samplesMin);
+            int max = Mathf.Max(min, rule.samplesMax);
             return Random.Range(min, max + 1);
         }
 
-        private RoamerExtractThreshold GetRoamerRuleForDay(int day)
+        private RoamerSampleThreshold GetRoamerRuleForDay(int day)
         {
-            if (roamerExtractThresholds == null || roamerExtractThresholds.Length == 0)
+            if (roamerSampleThresholds == null || roamerSampleThresholds.Length == 0)
             {
                 return null;
             }
 
             int safeDay = Mathf.Max(1, day);
-            RoamerExtractThreshold best = null;
-            for (int i = 0; i < roamerExtractThresholds.Length; i++)
+            RoamerSampleThreshold best = null;
+            for (int i = 0; i < roamerSampleThresholds.Length; i++)
             {
-                RoamerExtractThreshold rule = roamerExtractThresholds[i];
+                RoamerSampleThreshold rule = roamerSampleThresholds[i];
                 if (rule == null)
                 {
                     continue;
@@ -900,11 +893,11 @@ namespace WalaPaNameHehe
                 return best;
             }
 
-            for (int i = 0; i < roamerExtractThresholds.Length; i++)
+            for (int i = 0; i < roamerSampleThresholds.Length; i++)
             {
-                if (roamerExtractThresholds[i] != null)
+                if (roamerSampleThresholds[i] != null)
                 {
-                    return roamerExtractThresholds[i];
+                    return roamerSampleThresholds[i];
                 }
             }
 
@@ -913,11 +906,37 @@ namespace WalaPaNameHehe
 
         private void Update()
         {
+            if (!ShouldRunSpawnLogic())
+            {
+                return;
+            }
+
             TickApexSpawn();
+        }
+
+        private bool ShouldRunSpawnLogic()
+        {
+            if (IsServerActive())
+            {
+                return true;
+            }
+
+            // If Netcode session exists but we are not server, never run local spawn/despawn logic.
+            if (NetworkManager.Singleton != null)
+            {
+                return false;
+            }
+
+            return allowOfflineSpawn;
         }
 
         private void TickApexSpawn()
         {
+            if (!ShouldRunSpawnLogic())
+            {
+                return;
+            }
+
             WalaPaNameHehe.Multiplayer.GameManager manager = WalaPaNameHehe.Multiplayer.GameManager.Instance;
             if (manager == null)
             {
@@ -978,6 +997,7 @@ namespace WalaPaNameHehe
 
             ConfigurePlunderer(instance);
             spawnedPlunderer = instance;
+            SessionHud.PostLog($"Spawned Plunderer '{plundererPrefab.name}'");
         }
 
         private void SpawnHunter()
@@ -1160,6 +1180,7 @@ namespace WalaPaNameHehe
                 }
 
                 spawnedApex.Add(instance);
+                SessionHud.PostLog($"Spawned Apex '{apexPrefab.name}'");
             }
 
             apexSpawnedThisDay = spawnedApex.Count >= targetCount;
@@ -1168,6 +1189,7 @@ namespace WalaPaNameHehe
         private void OnPlundererDespawned(float nextSpawnTime)
         {
             nextPlundererSpawnTime = nextSpawnTime;
+            SessionHud.PostLog("Plunderer Flee");
         }
 
         private void ScheduleNextPlundererSpawn()

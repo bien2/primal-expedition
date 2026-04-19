@@ -813,6 +813,16 @@ namespace WalaPaNameHehe.Multiplayer
             localCollectedSamples = value;
         }
 
+        public void ResetCollectedSamples()
+        {
+            if (UseNetworkState && !IsServer)
+            {
+                return;
+            }
+
+            SetCollectedSamples(0);
+        }
+
         public void SetNextRoamerSpawnDay(int value)
         {
             if (UseNetworkState)
