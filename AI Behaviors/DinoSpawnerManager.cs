@@ -103,11 +103,11 @@ namespace WalaPaNameHehe
         [SerializeField] private Transform apexSpawnPointRoot;
         [SerializeField] private bool apexAutoCollectChildren = true;
         [SerializeField] private Transform[] apexSpawnPoints;
-        [Min(1)] [SerializeField] private int apexSpawnCount = 1;
         [System.Serializable]
         public class ApexDayThreshold
         {
             [Min(1)] public int day = 1;
+            [Min(1)] public int spawnCount = 1;
             [Min(0)] public int samplesMin = 2;
             [Min(0)] public int samplesMax = 4;
             public bool spawnOnDayStart = false;
@@ -132,11 +132,11 @@ namespace WalaPaNameHehe
         private Coroutine plundererLoop;
         private float nextPlundererSpawnTime;
         private int trackedApexDay = -1;
-        private int targetApexSamples = -1;
+        private int apexSampleBaselineThisDay;
+        private int nextApexSampleTarget = -1;
+        private int apexSpawnedCountThisDay;
         private int trackedRoamerDay = -1;
-        private int targetRoamerSamples = -1;
-        private bool roamerSpawnedThisDay;
-        private bool apexSpawnedThisDay;
+        private int nextRoamerSampleTarget = -1;
         private readonly List<GameObject> spawnedApex = new();
         private readonly List<GameObject> spawnedRoamers = new();
         private bool spawnLoopsStarted;
@@ -190,6 +190,7 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            int despawnCount = spawnedApex.Count;
             for (int i = spawnedApex.Count - 1; i >= 0; i--)
             {
                 GameObject apex = spawnedApex[i];
@@ -219,7 +220,10 @@ namespace WalaPaNameHehe
                 spawnedApex.RemoveAt(i);
             }
 
-            apexSpawnedThisDay = false;
+            if (despawnCount > 0)
+            {
+                SessionHud.PostLog("despawned apex");
+            }
         }
 
         private void HandleServerStarted()
@@ -630,13 +634,20 @@ namespace WalaPaNameHehe
 
             bool hasRoamerSettings = roamerPrefabs != null && roamerPrefabs.Length > 0;
             bool allowRoamerSpawns = hasRoamerSettings && ShouldAllowRoamerSpawns(day, manager);
+            Dictionary<DinoType, int> spawnedByType = null;
 
             for (int i = 0; i < spawnConfigs.Length; i++)
             {
                 DinoSpawnConfig config = spawnConfigs[i];
 
                 List<GameObject> list = GetSpawnList(i);
+                int beforeCleanupCount = list.Count;
                 CleanupDestroyed(list);
+                int removedCount = beforeCleanupCount - list.Count;
+                if (config.type != DinoType.Passive && removedCount > 0)
+                {
+                    SessionHud.PostLog($"despawned {config.type.ToString().ToLowerInvariant()} - {removedCount}");
+                }
 
                 int minCount = Mathf.Max(0, config.minCount);
                 int maxCount = Mathf.Max(minCount, config.maxCount);
@@ -712,7 +723,28 @@ namespace WalaPaNameHehe
                     }
 
                     list.Add(instance);
-                    SessionHud.PostLog($"Spawned {config.type} dino '{prefab.name}'");
+
+                    spawnedByType ??= new Dictionary<DinoType, int>();
+                    spawnedByType.TryGetValue(config.type, out int count);
+                    spawnedByType[config.type] = count + 1;
+                }
+            }
+
+            if (spawnedByType != null)
+            {
+                foreach (KeyValuePair<DinoType, int> kvp in spawnedByType)
+                {
+                    if (kvp.Value <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (kvp.Key == DinoType.Passive)
+                    {
+                        continue;
+                    }
+
+                    SessionHud.PostLog($"spawned {kvp.Key.ToString().ToLowerInvariant()} - {kvp.Value}");
                 }
             }
 
@@ -735,7 +767,13 @@ namespace WalaPaNameHehe
                 return false;
             }
 
+            int beforeCleanupCount = spawnedRoamers.Count;
             CleanupDestroyed(spawnedRoamers);
+            int removedCount = beforeCleanupCount - spawnedRoamers.Count;
+            if (removedCount > 0)
+            {
+                SessionHud.PostLog($"despawned roamer - {removedCount}");
+            }
 
             GameObject prefab = GetRandomRoamerPrefab();
             if (prefab == null)
@@ -774,7 +812,7 @@ namespace WalaPaNameHehe
             }
 
             spawnedRoamers.Add(instance);
-            SessionHud.PostLog($"Spawned Roamer '{prefab.name}'");
+            SessionHud.PostLog("spawned roamer");
             return true;
         }
 
@@ -824,21 +862,15 @@ namespace WalaPaNameHehe
             if (trackedRoamerDay != day)
             {
                 trackedRoamerDay = day;
-                roamerSpawnedThisDay = false;
-                targetRoamerSamples = GetRoamerTargetSamples(day);
+                nextRoamerSampleTarget = GetRoamerTargetSamples(day);
             }
 
-            if (roamerSpawnedThisDay)
+            if (nextRoamerSampleTarget <= 0)
             {
                 return false;
             }
 
-            if (targetRoamerSamples < 0)
-            {
-                return false;
-            }
-
-            return manager.collectedSamples >= targetRoamerSamples;
+            return manager.collectedSamples >= nextRoamerSampleTarget;
         }
 
         private void ConsumeRoamerSpawn(WalaPaNameHehe.Multiplayer.GameManager manager)
@@ -848,8 +880,8 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            roamerSpawnedThisDay = true;
             manager.ResetCollectedSamples();
+            nextRoamerSampleTarget = GetRoamerTargetSamples(trackedRoamerDay);
         }
 
         private int GetRoamerTargetSamples(int day)
@@ -860,7 +892,7 @@ namespace WalaPaNameHehe
                 return -1;
             }
 
-            int min = Mathf.Max(0, rule.samplesMin);
+            int min = Mathf.Max(1, rule.samplesMin);
             int max = Mathf.Max(min, rule.samplesMax);
             return Random.Range(min, max + 1);
         }
@@ -949,15 +981,36 @@ namespace WalaPaNameHehe
                 ResetApexForDay();
             }
 
-            if (!apexSpawnedThisDay && ShouldSpawnApexOnDayStart())
+            ApexDayThreshold dayRule = GetApexDayRule();
+            int maxSpawns = dayRule != null ? Mathf.Max(1, dayRule.spawnCount) : 0;
+            while (apexSpawnedCountThisDay < maxSpawns)
             {
-                SpawnApex();
-                return;
-            }
+                if (nextApexSampleTarget < 0)
+                {
+                    break;
+                }
 
-            if (!apexSpawnedThisDay && targetApexSamples > 0 && manager.collectedSamples >= targetApexSamples)
-            {
+                if (manager.collectedSamples < nextApexSampleTarget)
+                {
+                    break;
+                }
+
                 SpawnApex();
+                apexSpawnedCountThisDay += 1;
+
+                if (apexSpawnedCountThisDay >= maxSpawns)
+                {
+                    break;
+                }
+
+                int interval = RollApexSampleInterval(dayRule);
+                if (interval < 0)
+                {
+                    nextApexSampleTarget = -1;
+                    break;
+                }
+
+                nextApexSampleTarget += interval;
             }
         }
 
@@ -997,7 +1050,7 @@ namespace WalaPaNameHehe
 
             ConfigurePlunderer(instance);
             spawnedPlunderer = instance;
-            SessionHud.PostLog($"Spawned Plunderer '{plundererPrefab.name}'");
+            SessionHud.PostLog("spawned plunderer");
         }
 
         private void SpawnHunter()
@@ -1076,6 +1129,7 @@ namespace WalaPaNameHehe
             hunterSpawnPosition = position;
             hunterSpawnRotation = rotation;
             hasHunterSpawnLocation = true;
+            SessionHud.PostLog("spawned hunter");
         }
 
         public bool TryGetHunterSpawnLocation(GameObject hunter, out Vector3 position, out Quaternion rotation)
@@ -1122,6 +1176,7 @@ namespace WalaPaNameHehe
 
             spawnedHunter = null;
             hasHunterSpawnLocation = false;
+            SessionHud.PostLog("despawned hunter");
         }
 
         private Transform GetHunterSpawnPoint()
@@ -1149,41 +1204,29 @@ namespace WalaPaNameHehe
             }
 
             CleanupDestroyed(spawnedApex);
-            int targetCount = Mathf.Max(1, apexSpawnCount);
-            int remaining = targetCount - spawnedApex.Count;
-            if (remaining <= 0)
-            {
-                apexSpawnedThisDay = true;
-                return;
-            }
 
-            for (int i = 0; i < remaining; i++)
-            {
-                Transform spawnPoint = GetApexSpawnPoint();
-                Vector3 position = GetSpawnPosition(spawnPoint);
-                Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
+            Transform spawnPoint = GetApexSpawnPoint();
+            Vector3 position = GetSpawnPosition(spawnPoint);
+            Quaternion rotation = spawnPoint != null ? spawnPoint.rotation : transform.rotation;
 
-                GameObject instance = Instantiate(apexPrefab, position, rotation);
-                if (IsServerActive())
+            GameObject instance = Instantiate(apexPrefab, position, rotation);
+            if (IsServerActive())
+            {
+                NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                if (netObj == null)
                 {
-                    NetworkObject netObj = instance.GetComponent<NetworkObject>();
-                    if (netObj == null)
-                    {
-                        Debug.LogWarning($"DinoSpawnerManager: Apex prefab '{apexPrefab.name}' is missing NetworkObject. Destroying spawned instance.");
-                        Destroy(instance);
-                        continue;
-                    }
-                    if (!netObj.IsSpawned)
-                    {
-                        netObj.Spawn(true);
-                    }
+                    Debug.LogWarning($"DinoSpawnerManager: Apex prefab '{apexPrefab.name}' is missing NetworkObject. Destroying spawned instance.");
+                    Destroy(instance);
+                    return;
                 }
-
-                spawnedApex.Add(instance);
-                SessionHud.PostLog($"Spawned Apex '{apexPrefab.name}'");
+                if (!netObj.IsSpawned)
+                {
+                    netObj.Spawn(true);
+                }
             }
 
-            apexSpawnedThisDay = spawnedApex.Count >= targetCount;
+            spawnedApex.Add(instance);
+            SessionHud.PostLog("spawned apex");
         }
 
         private void OnPlundererDespawned(float nextSpawnTime)
@@ -1202,38 +1245,41 @@ namespace WalaPaNameHehe
         {
             WalaPaNameHehe.Multiplayer.GameManager manager = WalaPaNameHehe.Multiplayer.GameManager.Instance;
             trackedApexDay = manager != null ? manager.currentDay : -1;
-            apexSpawnedThisDay = false;
-            targetApexSamples = GetApexTargetSamples();
-        }
+            apexSpawnedCountThisDay = 0;
+            apexSampleBaselineThisDay = manager != null ? manager.collectedSamples : 0;
 
-
-        private int GetApexTargetSamples()
-        {
             ApexDayThreshold dayRule = GetApexDayRule();
-            if (dayRule != null)
+            if (dayRule == null)
             {
-                if (dayRule.spawnOnDayStart)
-                {
-                    return 0;
-                }
-
-                int min = Mathf.Max(0, dayRule.samplesMin);
-                int max = Mathf.Max(min, dayRule.samplesMax);
-                if (max <= 0)
-                {
-                    return -1;
-                }
-
-                return Random.Range(min, max + 1);
+                nextApexSampleTarget = -1;
+                return;
             }
 
-            return -1;
+            if (dayRule.spawnOnDayStart)
+            {
+                nextApexSampleTarget = apexSampleBaselineThisDay;
+                return;
+            }
+
+            int interval = RollApexSampleInterval(dayRule);
+            nextApexSampleTarget = interval >= 0 ? apexSampleBaselineThisDay + interval : -1;
         }
 
-        private bool ShouldSpawnApexOnDayStart()
+        private static int RollApexSampleInterval(ApexDayThreshold dayRule)
         {
-            ApexDayThreshold dayRule = GetApexDayRule();
-            return dayRule != null && dayRule.spawnOnDayStart;
+            if (dayRule == null)
+            {
+                return -1;
+            }
+
+            int min = Mathf.Max(0, dayRule.samplesMin);
+            int max = Mathf.Max(min, dayRule.samplesMax);
+            if (max <= 0)
+            {
+                return -1;
+            }
+
+            return Random.Range(min, max + 1);
         }
 
         private ApexDayThreshold GetApexDayRule()

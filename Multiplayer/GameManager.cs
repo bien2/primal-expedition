@@ -25,15 +25,24 @@ namespace WalaPaNameHehe.Multiplayer
 
         [Header("Expedition Settings")]
         [SerializeField] private int startingDay = 1;
-        [SerializeField] private int defaultRequiredSamples = 5;
-        [SerializeField] private float helicopterExtractionDelay = 30f;
+        private const int DefaultRequiredSamples = 5;
+        private const float HelicopterExtractionDelaySeconds = 30f;
 
         [Header("Blood Sample Threshold (Per Day)")]
         [SerializeField] private bool usePerDayRequiredSamples = true;
-        [Min(1)] [SerializeField] private int requiredSamplesDay1 = 5;
-        [Min(1)] [SerializeField] private int requiredSamplesDay2 = 7;
-        [Min(1)] [SerializeField] private int requiredSamplesDay3 = 9;
-        [Min(1)] [SerializeField] private int requiredSamplesDay4 = 11;
+        [Header("Required Samples Range (Per Run)")]
+        [Min(1)] [SerializeField] private int requiredSamplesDay1Min = 5;
+        [Min(1)] [SerializeField] private int requiredSamplesDay1Max = 5;
+        [Min(1)] [SerializeField] private int requiredSamplesDay2Min = 7;
+        [Min(1)] [SerializeField] private int requiredSamplesDay2Max = 7;
+        [Min(1)] [SerializeField] private int requiredSamplesDay3Min = 9;
+        [Min(1)] [SerializeField] private int requiredSamplesDay3Max = 9;
+        [Min(1)] [SerializeField] private int requiredSamplesDay4Min = 11;
+        [Min(1)] [SerializeField] private int requiredSamplesDay4Max = 11;
+
+        [Header("Debug - Give Bloodsample")]
+        [SerializeField] private GameObject giveBloodsamplePrefab;
+        [Min(1)] [SerializeField] private int giveBloodsampleCount = 1;
 
         [Header("Run Flow")]
         [SerializeField] private bool endRunWhenAllDead = true;
@@ -59,6 +68,8 @@ namespace WalaPaNameHehe.Multiplayer
         private readonly NetworkVariable<int> networkCurrentDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkRequiredSamples = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkCollectedSamples = new(writePerm: NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<int> networkCollectedSamplesThisRun = new(writePerm: NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<int> networkTotalSamplesCollected = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<int> networkNextRoamerSpawnDay = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<bool> networkIsExtractionAvailable = new(writePerm: NetworkVariableWritePermission.Server);
         private readonly NetworkVariable<float> networkExtractionTimeRemaining = new(writePerm: NetworkVariableWritePermission.Server);
@@ -67,6 +78,8 @@ namespace WalaPaNameHehe.Multiplayer
         private int localCurrentDay;
         private int localRequiredSamples;
         private int localCollectedSamples;
+        private int localCollectedSamplesThisRun;
+        private int localTotalSamplesCollected;
         private int localNextRoamerSpawnDay;
         private bool localIsExtractionAvailable;
         private float localExtractionTimeRemaining;
@@ -75,10 +88,17 @@ namespace WalaPaNameHehe.Multiplayer
         private Coroutine extractionCoroutine;
         private float allDeadTimer;
         private bool returningToLobby;
+        private bool hasRolledRequiredSamplesThisRun;
+        private int rolledRequiredSamplesDay1;
+        private int rolledRequiredSamplesDay2;
+        private int rolledRequiredSamplesDay3;
+        private int rolledRequiredSamplesDay4;
 
         public int currentDay => UseNetworkState ? networkCurrentDay.Value : localCurrentDay;
         public int requiredSamples => UseNetworkState ? networkRequiredSamples.Value : localRequiredSamples;
         public int collectedSamples => UseNetworkState ? networkCollectedSamples.Value : localCollectedSamples;
+        public int collectedSamplesThisRun => UseNetworkState ? networkCollectedSamplesThisRun.Value : localCollectedSamplesThisRun;
+        public int totalSamplesCollected => UseNetworkState ? networkTotalSamplesCollected.Value : localTotalSamplesCollected;
         public int nextRoamerSpawnDay => UseNetworkState ? networkNextRoamerSpawnDay.Value : localNextRoamerSpawnDay;
         public bool isExtractionAvailable => UseNetworkState ? networkIsExtractionAvailable.Value : localIsExtractionAvailable;
         public float extractionTimeRemaining => UseNetworkState ? networkExtractionTimeRemaining.Value : localExtractionTimeRemaining;
@@ -323,9 +343,11 @@ namespace WalaPaNameHehe.Multiplayer
 
             StopExtractionTimer();
 
+            RollRequiredSamplesForRun();
             SetCurrentDay(Mathf.Max(1, currentDay));
             SetRequiredSamples(GetRequiredSamplesForDay(currentDay));
             SetCollectedSamples(0);
+            SetCollectedSamplesThisRun(0);
             SetExtractionAvailable(false);
             SetExtractionTimeRemaining(0f);
             SetState(ExpeditionState.Exploring);
@@ -338,6 +360,29 @@ namespace WalaPaNameHehe.Multiplayer
 
             HunterMeterManager.Instance?.InitializeRun();
             LogMessage($"Session started. Day {currentDay}. Required samples: {requiredSamples}");
+        }
+
+        private void RollRequiredSamplesForRun()
+        {
+            hasRolledRequiredSamplesThisRun = false;
+
+            if (!usePerDayRequiredSamples)
+            {
+                return;
+            }
+
+            rolledRequiredSamplesDay1 = GetRandomRequiredSamples(requiredSamplesDay1Min, requiredSamplesDay1Max);
+            rolledRequiredSamplesDay2 = GetRandomRequiredSamples(requiredSamplesDay2Min, requiredSamplesDay2Max);
+            rolledRequiredSamplesDay3 = GetRandomRequiredSamples(requiredSamplesDay3Min, requiredSamplesDay3Max);
+            rolledRequiredSamplesDay4 = GetRandomRequiredSamples(requiredSamplesDay4Min, requiredSamplesDay4Max);
+            hasRolledRequiredSamplesThisRun = true;
+        }
+
+        private static int GetRandomRequiredSamples(int min, int max)
+        {
+            int safeMin = Mathf.Max(1, min);
+            int safeMax = Mathf.Max(safeMin, max);
+            return Random.Range(safeMin, safeMax + 1);
         }
 
         public void AddSample()
@@ -356,6 +401,8 @@ namespace WalaPaNameHehe.Multiplayer
 
             int newSampleCount = collectedSamples + 1;
             SetCollectedSamples(newSampleCount);
+            SetCollectedSamplesThisRun(collectedSamplesThisRun + 1);
+            SetTotalSamplesCollected(totalSamplesCollected + 1);
 
             LogMessage($"Sample collected: {collectedSamples} / {requiredSamples}");
 
@@ -365,6 +412,87 @@ namespace WalaPaNameHehe.Multiplayer
                 SetState(ExpeditionState.ExtractionAvailable);
                 LogMessage("Extraction available");
             }
+        }
+
+        public void DebugGiveBloodSampleToLocalPlayer()
+        {
+            if (!UseNetworkState)
+            {
+                LogMessage("DebugGiveBloodSample ignored. Not in network session.");
+                return;
+            }
+
+            if (!HasAuthority)
+            {
+                DebugGiveBloodSampleServerRpc();
+                return;
+            }
+
+            NetworkManager nm = ActiveNetworkManager;
+            if (nm == null)
+            {
+                return;
+            }
+
+            DebugGiveBloodSampleInternal(nm.LocalClientId);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void DebugGiveBloodSampleServerRpc(ServerRpcParams rpcParams = default)
+        {
+            DebugGiveBloodSampleInternal(rpcParams.Receive.SenderClientId);
+        }
+
+        private void DebugGiveBloodSampleInternal(ulong clientId)
+        {
+            if (!HasAuthority)
+            {
+                return;
+            }
+
+            if (giveBloodsamplePrefab == null)
+            {
+                int countNoPrefab = Mathf.Max(1, giveBloodsampleCount);
+                for (int i = 0; i < countNoPrefab; i++)
+                {
+                    AddSample();
+                }
+                LogMessage($"Gave samples +{countNoPrefab} (no prefab set)");
+                return;
+            }
+
+            NetworkManager nm = ActiveNetworkManager;
+            if (nm == null || nm.SpawnManager == null)
+            {
+                return;
+            }
+
+            NetworkObject player = nm.SpawnManager.GetPlayerNetworkObject(clientId);
+            if (player == null)
+            {
+                return;
+            }
+
+            WalaPaNameHehe.InventorySystem inv = player.GetComponentInChildren<WalaPaNameHehe.InventorySystem>(true);
+            if (inv == null)
+            {
+                return;
+            }
+
+            int count = Mathf.Max(1, giveBloodsampleCount);
+            if (inv.ServerGrantNetworkedItem(giveBloodsamplePrefab, count))
+            {
+                LogMessage($"Gave bloodsample item x{count}");
+                return;
+            }
+
+            if (inv.ServerReplaceSelectedItemWithPrefab(giveBloodsamplePrefab))
+            {
+                LogMessage("Gave bloodsample item x1 (replaced selected slot)");
+                return;
+            }
+
+            LogMessage("Give bloodsample failed. Inventory full or spawn failed.");
         }
 
         public void CallExtraction()
@@ -383,7 +511,7 @@ namespace WalaPaNameHehe.Multiplayer
 
             SetState(ExpeditionState.ExtractionCalled);
             StartExtractionTimer();
-            LogMessage($"Helicopter arriving in {Mathf.CeilToInt(helicopterExtractionDelay)} seconds");
+            LogMessage($"Helicopter arriving in {Mathf.CeilToInt(HelicopterExtractionDelaySeconds)} seconds");
         }
 
         public void CompleteExpedition()
@@ -691,6 +819,8 @@ namespace WalaPaNameHehe.Multiplayer
             localCurrentDay = Mathf.Max(1, startingDay);
             localRequiredSamples = GetRequiredSamplesForDay(localCurrentDay);
             localCollectedSamples = 0;
+            localCollectedSamplesThisRun = 0;
+            localTotalSamplesCollected = 0;
             localNextRoamerSpawnDay = 0;
             localIsExtractionAvailable = false;
             localExtractionTimeRemaining = 0f;
@@ -701,17 +831,27 @@ namespace WalaPaNameHehe.Multiplayer
         {
             if (!usePerDayRequiredSamples)
             {
-                return Mathf.Max(1, defaultRequiredSamples);
+                return Mathf.Max(1, DefaultRequiredSamples);
             }
 
             int safeDay = Mathf.Max(1, day);
             int clampedDay = Mathf.Min(4, safeDay);
+            if (hasRolledRequiredSamplesThisRun)
+            {
+                return clampedDay switch
+                {
+                    1 => Mathf.Max(1, rolledRequiredSamplesDay1),
+                    2 => Mathf.Max(1, rolledRequiredSamplesDay2),
+                    3 => Mathf.Max(1, rolledRequiredSamplesDay3),
+                    _ => Mathf.Max(1, rolledRequiredSamplesDay4),
+                };
+            }
             return clampedDay switch
             {
-                1 => Mathf.Max(1, requiredSamplesDay1),
-                2 => Mathf.Max(1, requiredSamplesDay2),
-                3 => Mathf.Max(1, requiredSamplesDay3),
-                _ => Mathf.Max(1, requiredSamplesDay4),
+                1 => Mathf.Max(1, requiredSamplesDay1Min),
+                2 => Mathf.Max(1, requiredSamplesDay2Min),
+                3 => Mathf.Max(1, requiredSamplesDay3Min),
+                _ => Mathf.Max(1, requiredSamplesDay4Min),
             };
         }
 
@@ -720,6 +860,8 @@ namespace WalaPaNameHehe.Multiplayer
             networkCurrentDay.Value = localCurrentDay;
             networkRequiredSamples.Value = localRequiredSamples;
             networkCollectedSamples.Value = localCollectedSamples;
+            networkCollectedSamplesThisRun.Value = localCollectedSamplesThisRun;
+            networkTotalSamplesCollected.Value = localTotalSamplesCollected;
             networkNextRoamerSpawnDay.Value = localNextRoamerSpawnDay;
             networkIsExtractionAvailable.Value = localIsExtractionAvailable;
             networkExtractionTimeRemaining.Value = localExtractionTimeRemaining;
@@ -731,6 +873,8 @@ namespace WalaPaNameHehe.Multiplayer
             localCurrentDay = networkCurrentDay.Value;
             localRequiredSamples = networkRequiredSamples.Value;
             localCollectedSamples = networkCollectedSamples.Value;
+            localCollectedSamplesThisRun = networkCollectedSamplesThisRun.Value;
+            localTotalSamplesCollected = networkTotalSamplesCollected.Value;
             localNextRoamerSpawnDay = networkNextRoamerSpawnDay.Value;
             localIsExtractionAvailable = networkIsExtractionAvailable.Value;
             localExtractionTimeRemaining = networkExtractionTimeRemaining.Value;
@@ -756,7 +900,7 @@ namespace WalaPaNameHehe.Multiplayer
 
         private IEnumerator ExtractionCountdownRoutine()
         {
-            SetExtractionTimeRemaining(helicopterExtractionDelay);
+            SetExtractionTimeRemaining(HelicopterExtractionDelaySeconds);
 
             while (extractionTimeRemaining > 0f)
             {
@@ -811,6 +955,28 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             localCollectedSamples = value;
+        }
+
+        private void SetCollectedSamplesThisRun(int value)
+        {
+            int safe = Mathf.Max(0, value);
+            if (UseNetworkState)
+            {
+                networkCollectedSamplesThisRun.Value = safe;
+            }
+
+            localCollectedSamplesThisRun = safe;
+        }
+
+        private void SetTotalSamplesCollected(int value)
+        {
+            int safe = Mathf.Max(0, value);
+            if (UseNetworkState)
+            {
+                networkTotalSamplesCollected.Value = safe;
+            }
+
+            localTotalSamplesCollected = safe;
         }
 
         public void ResetCollectedSamples()

@@ -10,6 +10,7 @@ namespace WalaPaNameHehe
         public float speedMultiplier = 1.5f;
         public float effectDurationSeconds = 5f;
         public float holdToUseSeconds = 2f;
+        public Key useKey = Key.E;
         public bool showHoldUi = true;
         public Vector2 holdUiSize = new Vector2(240f, 16f);
         public Vector2 holdUiOffset = new Vector2(0f, 70f);
@@ -41,17 +42,17 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            bool rightHeld = false;
-            if (Mouse.current != null)
+            bool keyHeld = false;
+            if (Keyboard.current != null)
             {
-                rightHeld = Mouse.current.rightButton.isPressed;
+                keyHeld = Keyboard.current[useKey].isPressed;
             }
             else
             {
-                rightHeld = Input.GetMouseButton(1);
+                keyHeld = Input.GetKey(KeyCode.E);
             }
 
-            if (!rightHeld)
+            if (!keyHeld)
             {
                 ResetHold();
                 return;
@@ -207,15 +208,57 @@ namespace WalaPaNameHehe
             EnsureUiPixel();
             float progress = Mathf.Clamp01(holdTimer / holdToUseSeconds);
 
-            float width = Mathf.Max(40f, holdUiSize.x);
-            float height = Mathf.Max(6f, holdUiSize.y);
-            float x = (Screen.width - width) * 0.5f + holdUiOffset.x;
-            float y = (Screen.height * 0.5f) + holdUiOffset.y;
+            GUIStyle infoStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                fontSize = 15
+            };
 
-            GUI.color = holdUiBackgroundColor;
-            GUI.DrawTexture(new Rect(x, y, width, height), uiPixel);
-            GUI.color = holdUiFillColor;
-            GUI.DrawTexture(new Rect(x, y, width * progress, height), uiPixel);
+            float cx = (Screen.width * 0.5f) + holdUiOffset.x;
+            float cy = (Screen.height * 0.5f) + holdUiOffset.y;
+            DrawCircularProgressRing(
+                cx,
+                cy,
+                34f,
+                8f,
+                progress,
+                96,
+                holdUiBackgroundColor,
+                holdUiFillColor);
+            GUI.Label(new Rect(cx - 180f, cy + 44f, 360f, 22f), "Using Adrenaline", infoStyle);
+        }
+
+        private void DrawCircularProgressRing(
+            float centerX,
+            float centerY,
+            float radius,
+            float thickness,
+            float progress,
+            int segments,
+            Color backgroundColor,
+            Color fillColor)
+        {
+            if (uiPixel == null)
+            {
+                return;
+            }
+
+            int segCount = Mathf.Max(16, segments);
+            float clamped = Mathf.Clamp01(progress);
+            int fillSegments = Mathf.RoundToInt(segCount * clamped);
+
+            for (int i = 0; i < segCount; i++)
+            {
+                float t = (float)i / segCount;
+                float angle = t * Mathf.PI * 2f - (Mathf.PI * 0.5f);
+                float x = centerX + Mathf.Cos(angle) * radius;
+                float y = centerY + Mathf.Sin(angle) * radius;
+
+                GUI.color = i < fillSegments ? fillColor : backgroundColor;
+                GUI.DrawTexture(new Rect(x - (thickness * 0.5f), y - (thickness * 0.5f), thickness, thickness), uiPixel);
+            }
+
             GUI.color = Color.white;
         }
     }

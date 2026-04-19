@@ -802,10 +802,11 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            // Always drop killcam before blackout so we return to local view (or a black screen).
+            ragdollController?.ClearExternalCamera();
+
             if (deathBlackout != null)
             {
-                // Drop killcam before blackout so we return to local view + black screen.
-                ragdollController?.ClearExternalCamera();
                 deathBlackout.enabled = true;
                 deathBlackout.TriggerBlackout(useFade);
             }
