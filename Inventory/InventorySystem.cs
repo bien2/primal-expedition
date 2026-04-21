@@ -204,6 +204,11 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                return;
+            }
+
             if (uiSuppressed)
             {
                 return;

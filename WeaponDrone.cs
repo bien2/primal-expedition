@@ -81,6 +81,7 @@ namespace WalaPaNameHehe
         private const float droneHumEmitInterval = 0.5f;
 
         public bool IsSummoningDrone => !isUsingDrone && holdTimer > 0f && holdDurationToSummon > 0f;
+        public bool IsUsingDrone => isUsingDrone;
 
         private void Start()
         {
@@ -124,6 +125,12 @@ namespace WalaPaNameHehe
 
             if (Keyboard.current == null)
             {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                ForceRecallDueToGrab();
                 return;
             }
 
@@ -186,6 +193,13 @@ namespace WalaPaNameHehe
         private void UpdateSummonInput()
         {
             if (isDroneActivationPending)
+            {
+                holdTimer = 0f;
+                StopSummonLoopSound();
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
             {
                 holdTimer = 0f;
                 StopSummonLoopSound();
@@ -516,6 +530,30 @@ namespace WalaPaNameHehe
             if (IsNetworkActive() && IsServer)
             {
                 DespawnDroneOnServerImmediate();
+            }
+        }
+
+        public void ForceRecallDueToGrab()
+        {
+            if (!CoopGuard.IsLocalOwnerOrOffline(this))
+            {
+                return;
+            }
+
+            if (activeDrone == null && !isUsingDrone && !playerBodyLockedForDrone)
+            {
+                return;
+            }
+
+            if (activeDrone != null && !isReturningDrone)
+            {
+                BeginReturnToPlayer();
+            }
+
+            if (isUsingDrone || playerBodyLockedForDrone || renderersOverriddenForDrone)
+            {
+                SetDronePov(false);
+                isUsingDrone = false;
             }
         }
 
@@ -1329,6 +1367,11 @@ namespace WalaPaNameHehe
         private void OnGUI()
         {
             if (!showUi || !CoopGuard.IsLocalOwnerOrOffline(this))
+            {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
             {
                 return;
             }

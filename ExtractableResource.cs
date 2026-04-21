@@ -29,11 +29,17 @@ namespace WalaPaNameHehe
             0d,
             NetworkVariableReadPermission.Everyone,
             NetworkVariableWritePermission.Server);
+        private readonly NetworkVariable<ulong> extractingClientIdNet = new(
+            ulong.MaxValue,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
 
         public int RemainingExtractionCount => IsNetworkRunning() ? remainingExtractionCountNet.Value : (wasExtractedOffline ? 0 : 1);
         public bool IsStunned => GetStunRemainingSeconds() > 0f;
         public float StunRemainingSeconds => GetStunRemainingSeconds();
         public bool CanExtract => RemainingExtractionCount > 0 && IsStunned;
+        public ulong ExtractingClientId => IsNetworkRunning() ? extractingClientIdNet.Value : ulong.MaxValue;
+        public bool IsBeingExtracted => ExtractingClientId != ulong.MaxValue;
         private bool wasExtractedOffline;
         private float stunnedUntilOfflineTime;
         private MaterialPropertyBlock indicatorMpb;
@@ -53,6 +59,7 @@ namespace WalaPaNameHehe
             {
                 remainingExtractionCountNet.Value = 1;
                 stunnedUntilServerTimeNet.Value = 0d;
+                extractingClientIdNet.Value = ulong.MaxValue;
             }
 
             ApplyDepletedVisibilityState();
@@ -107,12 +114,61 @@ namespace WalaPaNameHehe
                 wasExtractedOffline = true;
             }
 
+            if (IsNetworkRunning() && IsServer && remainingExtractionCountNet.Value <= 0)
+            {
+                extractingClientIdNet.Value = ulong.MaxValue;
+            }
+
             if (disableWhenDepleted && RemainingExtractionCount <= 0)
             {
                 ApplyDepletedVisibilityState();
             }
 
             return true;
+        }
+
+        public bool ServerTryBeginExtraction(ulong clientId)
+        {
+            if (!IsNetworkRunning() || !IsServer)
+            {
+                return false;
+            }
+
+            if (!CanExtract)
+            {
+                return false;
+            }
+
+            if (extractingClientIdNet.Value != ulong.MaxValue && extractingClientIdNet.Value != clientId)
+            {
+                return false;
+            }
+
+            extractingClientIdNet.Value = clientId;
+            return true;
+        }
+
+        public void ServerEndExtraction(ulong clientId)
+        {
+            if (!IsNetworkRunning() || !IsServer)
+            {
+                return;
+            }
+
+            if (extractingClientIdNet.Value == clientId)
+            {
+                extractingClientIdNet.Value = ulong.MaxValue;
+            }
+        }
+
+        public void ServerClearExtractionLock()
+        {
+            if (!IsNetworkRunning() || !IsServer)
+            {
+                return;
+            }
+
+            extractingClientIdNet.Value = ulong.MaxValue;
         }
 
         public bool TryApplyStun()

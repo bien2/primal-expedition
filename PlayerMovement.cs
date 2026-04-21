@@ -163,6 +163,7 @@ namespace WalaPaNameHehe
         private CursorLockMode storedCursorLockState;
         private bool storedCursorVisible;
         private bool isGrabbed;
+        private bool isIncapacitated;
         private bool movementSuppressed;
         private bool hasGrabbedPhysicsState;
         private bool grabbedWasKinematic;
@@ -1969,6 +1970,15 @@ namespace WalaPaNameHehe
                     hasGrabbedPhysicsState = false;
                 }
             }
+        }
+
+        public bool IsGrabbed => isGrabbed;
+        public bool IsIncapacitated => isIncapacitated;
+        public bool IsInteractionLocked => isGrabbed || isIncapacitated;
+
+        public void SetIncapacitated(bool incapacitated)
+        {
+            isIncapacitated = incapacitated;
         }
 
     }

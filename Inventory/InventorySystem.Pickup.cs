@@ -20,6 +20,16 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                ClearTerminalDetection();
+                detectedLoadoutStation = null;
+                detectedPickupObject = null;
+                detectedOutline = null;
+                UpdateHoverHighlight(null);
+                return;
+            }
+
             if (loadoutUiOpen)
             {
                 if (!forceLoadoutSelection && Keyboard.current.escapeKey.wasPressedThisFrame)

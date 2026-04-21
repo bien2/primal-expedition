@@ -25,6 +25,7 @@ namespace WalaPaNameHehe
 
         private int submittedCount;
         private bool isSubmitTargetInFront;
+        private PlayerMovement localPlayerMovement;
         private readonly NetworkVariable<int> submittedCountNet = new(
             0,
             NetworkVariableReadPermission.Everyone,
@@ -46,6 +47,12 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (localPlayerMovement != null && localPlayerMovement.IsInteractionLocked)
+            {
+                isSubmitTargetInFront = false;
+                return;
+            }
+
             isSubmitTargetInFront = TryGetSubmitTargetInFront();
 
             if (Keyboard.current[submitKey].wasPressedThisFrame && isSubmitTargetInFront && CanSubmitCurrentItem())
@@ -62,6 +69,11 @@ namespace WalaPaNameHehe
 
         private void OnGUI()
         {
+            if (showSubmitPrompt && IsLocalInventory() && localPlayerMovement != null && localPlayerMovement.IsInteractionLocked)
+            {
+                return;
+            }
+
             if (showSubmitPrompt && IsLocalInventory() && CanSubmitCurrentItem() && isSubmitTargetInFront)
             {
                 GUIStyle centered = new GUIStyle(GUI.skin.label)
@@ -82,6 +94,10 @@ namespace WalaPaNameHehe
         {
             if (inventorySystem != null)
             {
+                if (localPlayerMovement == null)
+                {
+                    localPlayerMovement = inventorySystem.GetComponent<PlayerMovement>();
+                }
                 return;
             }
 
@@ -100,6 +116,7 @@ namespace WalaPaNameHehe
                 }
 
                 inventorySystem = system;
+                localPlayerMovement = inventorySystem.GetComponent<PlayerMovement>();
                 break;
             }
         }

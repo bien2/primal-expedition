@@ -103,6 +103,11 @@ namespace WalaPaNameHehe
                 return false;
             }
 
+            if (playerMovement.IsInteractionLocked)
+            {
+                return false;
+            }
+
             GameObject selected = inventorySystem.GetSelectedItem();
             if (selected == null)
             {

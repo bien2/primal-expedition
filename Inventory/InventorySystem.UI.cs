@@ -12,6 +12,11 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                return;
+            }
+
             DrawCrosshair();
 
             if (uiSuppressed)
