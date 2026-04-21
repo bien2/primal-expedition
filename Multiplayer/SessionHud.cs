@@ -32,6 +32,7 @@ namespace WalaPaNameHehe.Multiplayer
         [SerializeField] private string runStatePrefix = "Run: ";
         [SerializeField] private string extractionPrefix = "Extract: ";
         [SerializeField] private string huntedPrefix = "Hunted: ";
+        [SerializeField] private string threatLevelPrefix = "Threat Level: ";
 
         [Header("Debug")]
         [SerializeField] private bool showGameManagerState = true;
@@ -133,6 +134,13 @@ namespace WalaPaNameHehe.Multiplayer
                 {
                     lines.Add($"{samplesThisRunPrefix}{bloodSampleSubmitter.SharedSubmittedCount}");
                 }
+            }
+
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            if (dm != null)
+            {
+                int secs = Mathf.FloorToInt(dm.ElapsedSeconds);
+                lines.Add($"{threatLevelPrefix}{dm.CurrentThreat} (T+{secs}s)");
             }
 
             // Hunter meter list

@@ -1625,7 +1625,7 @@ public class DinoAI : NetworkBehaviour
 
         fleeUntilTime = Time.time + FleeMaxSeconds;
         hasFleeDestination = false;
-        fleeToDespawnPoint = DinoDespawnPoint.Point != null;
+        fleeToDespawnPoint = DinoDespawnService.Point != null;
 
         if (playAlertRoar)
         {
@@ -1645,7 +1645,7 @@ public class DinoAI : NetworkBehaviour
             return;
         }
 
-        if (fleeToDespawnPoint && DinoDespawnPoint.Point != null)
+        if (fleeToDespawnPoint && DinoDespawnService.Point != null)
         {
             if (Time.time >= fleeUntilTime)
             {
@@ -1683,7 +1683,7 @@ public class DinoAI : NetworkBehaviour
                 return;
             }
 
-            fleeDestination = DinoDespawnPoint.Point.position;
+            fleeDestination = DinoDespawnService.Point.position;
             hasFleeDestination = true;
             SetDestinationSafe(fleeDestination);
             return;
