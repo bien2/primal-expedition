@@ -2,6 +2,7 @@ using System.Collections;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Unity.Netcode;
+using WalaPaNameHehe.Multiplayer;
 
 namespace WalaPaNameHehe
 {
@@ -46,10 +47,13 @@ namespace WalaPaNameHehe
         private Coroutine biteHoldRoutine;
         private bool isGrabbedHold;
         private bool isGrabHoldActive;
+        private bool isRagdollHoldActive;
         private bool lastHoldUsedRagdoll;
         private Transform grabHoldPoint;
         private bool pendingDropRagdollOnRelease;
         private float pendingDropRagdollDuration;
+        private InventorySystem inventorySystem;
+        private WeaponDrone weaponDrone;
         private Coroutine dropRagdollRoutine;
         private Coroutine autoRecoverRoutine;
         private Coroutine pendingInstakillRoutine;
@@ -110,6 +114,12 @@ namespace WalaPaNameHehe
             }
 
             if (playerMovement == null || playerMovement.IsDead || IsDowned)
+            {
+                CancelReviveIfNeeded();
+                return;
+            }
+
+            if (playerMovement.IsInteractionLocked)
             {
                 CancelReviveIfNeeded();
                 return;
@@ -248,6 +258,8 @@ namespace WalaPaNameHehe
             {
                 playerMovement.SetExternalSpeedMultiplier(1f);
             }
+
+            UpdateIncapacitationLocal();
         }
 
         public bool ServerApplyHit(HitResult hitResult)
@@ -513,13 +525,16 @@ namespace WalaPaNameHehe
             if (useRagdoll)
             {
                 isGrabHoldActive = false;
+                isRagdollHoldActive = true;
                 if (ragdollController != null)
                 {
                     ragdollController.BeginHold(bitePoint);
                 }
+                UpdateIncapacitationLocal();
             }
             else
             {
+                isRagdollHoldActive = false;
                 grabHoldPoint = bitePoint;
                 isGrabbedHold = grabHoldPoint != null;
                 isGrabHoldActive = true;
@@ -529,6 +544,8 @@ namespace WalaPaNameHehe
                 {
                     playerMovement.SetGrabbed(isGrabbedHold);
                 }
+
+                UpdateIncapacitationLocal();
             }
         }
 
@@ -551,9 +568,15 @@ namespace WalaPaNameHehe
                 return;
             }
 
-            if (lastHoldUsedRagdoll && ragdollController != null)
+            if (lastHoldUsedRagdoll)
             {
-                ragdollController.EndHold(true);
+                if (ragdollController != null)
+                {
+                    ragdollController.EndHold(true);
+                }
+
+                isRagdollHoldActive = false;
+                UpdateIncapacitationLocal();
             }
         }
 
@@ -607,6 +630,47 @@ namespace WalaPaNameHehe
             {
                 playerMovement.SetGrabbed(false);
             }
+            UpdateIncapacitationLocal();
+        }
+
+        private void UpdateIncapacitationLocal()
+        {
+            if (playerMovement == null)
+            {
+                return;
+            }
+
+            bool shouldSuppress = syncedIsDowned.Value || isRagdollHoldActive || playerMovement.IsGrabbed;
+            playerMovement.SetIncapacitated(shouldSuppress);
+            ApplyIncapacitationSuppression(shouldSuppress);
+        }
+
+        private void ApplyIncapacitationSuppression(bool suppress)
+        {
+            if (!CoopGuard.IsLocalOwnerOrOffline(this))
+            {
+                return;
+            }
+
+            if (inventorySystem == null)
+            {
+                inventorySystem = GetComponent<InventorySystem>();
+            }
+
+            if (weaponDrone == null)
+            {
+                weaponDrone = GetComponent<WeaponDrone>();
+            }
+
+            if (inventorySystem != null)
+            {
+                inventorySystem.SetUiSuppressed(suppress);
+            }
+
+            if (suppress && weaponDrone != null)
+            {
+                weaponDrone.ForceRecallDueToGrab();
+            }
         }
 
         private void ApplyDropRagdollNow(float durationSeconds)
@@ -626,6 +690,8 @@ namespace WalaPaNameHehe
                 StopCoroutine(dropRagdollRoutine);
             }
 
+            isRagdollHoldActive = true;
+            UpdateIncapacitationLocal();
             dropRagdollRoutine = StartCoroutine(DropRagdollRoutine(durationSeconds));
         }
 
@@ -670,6 +736,9 @@ namespace WalaPaNameHehe
             {
                 playerMovement.SetRagdollPovActive(false);
             }
+
+            isRagdollHoldActive = false;
+            UpdateIncapacitationLocal();
             dropRagdollRoutine = null;
         }
 

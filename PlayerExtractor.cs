@@ -40,8 +40,11 @@ namespace WalaPaNameHehe
         private ExtractableResource currentResource;
         private ulong currentResourceNetworkId;
         private bool hasCurrentResourceNetworkId;
+        private Vector3 currentResourcePosition;
+        private string currentResourceName;
         private Texture2D uiPixel;
         private WeaponDrone weaponDrone;
+        private PlayerMovement playerMovement;
         private string transientPromptMessage;
         private float transientPromptUntil;
         private float nextExtractionSoundTime;
@@ -49,6 +52,7 @@ namespace WalaPaNameHehe
         private const int ExtractionFailNotFound = 1;
         private const int ExtractionFailNotSedated = 2;
         private const int ExtractionFailAlreadyDepleted = 3;
+        private const int ExtractionFailBusy = 4;
 
         public bool IsExtractingInProgress => isExtracting;
 
@@ -67,6 +71,11 @@ namespace WalaPaNameHehe
             if (weaponDrone == null)
             {
                 weaponDrone = GetComponent<WeaponDrone>();
+            }
+
+            if (playerMovement == null)
+            {
+                playerMovement = GetComponent<PlayerMovement>();
             }
 
             if (extractionAudioSource == null)
@@ -91,6 +100,14 @@ namespace WalaPaNameHehe
 
             if (Keyboard.current == null)
             {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                CancelExtraction();
+                detectedBox = null;
+                detectedResource = null;
                 return;
             }
 
@@ -122,6 +139,16 @@ namespace WalaPaNameHehe
                     if (requireExtractableResource && (detectedResource == null || !detectedResource.CanExtract))
                     {
                         return;
+                    }
+
+                    if (requireExtractableResource && IsNetworkedSessionActive() && detectedResource != null && detectedResource.IsBeingExtracted)
+                    {
+                        ulong localClientId = NetworkManager != null ? NetworkManager.LocalClientId : ulong.MaxValue;
+                        if (detectedResource.ExtractingClientId != ulong.MaxValue && detectedResource.ExtractingClientId != localClientId)
+                        {
+                            SetTransientPrompt("A player is extracting", 1.5f);
+                            return;
+                        }
                     }
 
                     StartExtraction(detectedBox, detectedResource);
@@ -210,17 +237,26 @@ namespace WalaPaNameHehe
                 NetworkObject networkObject = currentResource.GetComponentInParent<NetworkObject>();
                 hasCurrentResourceNetworkId = networkObject != null && networkObject.IsSpawned;
                 currentResourceNetworkId = hasCurrentResourceNetworkId ? networkObject.NetworkObjectId : 0;
+                currentResourcePosition = currentResource.transform.position;
+                currentResourceName = CleanName(currentResource.name);
             }
             else
             {
                 hasCurrentResourceNetworkId = false;
                 currentResourceNetworkId = 0;
+                currentResourcePosition = Vector3.zero;
+                currentResourceName = string.Empty;
             }
             detectedBox = null;
             detectedResource = null;
             extractTimer = 0f;
             isExtracting = true;
             StartExtractionLoopSound();
+
+            if (requireExtractableResource && IsNetworkedSessionActive())
+            {
+                RequestBeginExtractionLockServerRpc(hasCurrentResourceNetworkId, currentResourceNetworkId, currentResourcePosition, currentResourceName);
+            }
         }
 
         private bool IsStillValidExtractionTarget()
@@ -251,9 +287,7 @@ namespace WalaPaNameHehe
             StopExtractionLoopSound();
             if (NetworkManager != null && NetworkManager.IsListening)
             {
-                Vector3 resourcePosition = currentResource != null ? currentResource.transform.position : Vector3.zero;
-                string resourceName = currentResource != null ? CleanName(currentResource.name) : string.Empty;
-                RequestCompleteExtractionServerRpc(hasCurrentResourceNetworkId, currentResourceNetworkId, resourcePosition, resourceName);
+                RequestCompleteExtractionServerRpc(hasCurrentResourceNetworkId, currentResourceNetworkId, currentResourcePosition, currentResourceName);
                 isExtracting = false;
                 extractTimer = 0f;
                 currentBox = null;
@@ -261,6 +295,8 @@ namespace WalaPaNameHehe
                 currentResource = null;
                 hasCurrentResourceNetworkId = false;
                 currentResourceNetworkId = 0;
+                currentResourcePosition = Vector3.zero;
+                currentResourceName = string.Empty;
                 return;
             }
 
@@ -291,6 +327,7 @@ namespace WalaPaNameHehe
         private void CancelExtraction()
         {
             StopExtractionLoopSound();
+            ReleaseExtractionLockIfNeeded();
             isExtracting = false;
             extractTimer = 0f;
             currentBox = null;
@@ -298,6 +335,8 @@ namespace WalaPaNameHehe
             currentResource = null;
             hasCurrentResourceNetworkId = false;
             currentResourceNetworkId = 0;
+            currentResourcePosition = Vector3.zero;
+            currentResourceName = string.Empty;
         }
 
         private Transform GetTargetRoot(Collider target)
@@ -389,6 +428,7 @@ namespace WalaPaNameHehe
 
                 if (!resource.IsStunned)
                 {
+                    resource.ServerEndExtraction(requesterClientId);
                     NotifyExtractionFailedClientRpc(ExtractionFailNotSedated, new ClientRpcParams
                     {
                         Send = new ClientRpcSendParams
@@ -401,7 +441,32 @@ namespace WalaPaNameHehe
 
                 if (resource.RemainingExtractionCount <= 0)
                 {
+                    resource.ServerEndExtraction(requesterClientId);
                     NotifyExtractionFailedClientRpc(ExtractionFailAlreadyDepleted, new ClientRpcParams
+                    {
+                        Send = new ClientRpcSendParams
+                        {
+                            TargetClientIds = new[] { requesterClientId }
+                        }
+                    });
+                    return;
+                }
+
+                if (resource.IsBeingExtracted && resource.ExtractingClientId != requesterClientId)
+                {
+                    NotifyExtractionFailedClientRpc(ExtractionFailBusy, new ClientRpcParams
+                    {
+                        Send = new ClientRpcSendParams
+                        {
+                            TargetClientIds = new[] { requesterClientId }
+                        }
+                    });
+                    return;
+                }
+
+                if (!resource.ServerTryBeginExtraction(requesterClientId))
+                {
+                    NotifyExtractionFailedClientRpc(ExtractionFailBusy, new ClientRpcParams
                     {
                         Send = new ClientRpcSendParams
                         {
@@ -413,6 +478,7 @@ namespace WalaPaNameHehe
 
                 if (!resource.TryConsumeExtraction())
                 {
+                    resource.ServerEndExtraction(requesterClientId);
                     NotifyExtractionFailedClientRpc(ExtractionFailAlreadyDepleted, new ClientRpcParams
                     {
                         Send = new ClientRpcSendParams
@@ -422,6 +488,8 @@ namespace WalaPaNameHehe
                     });
                     return;
                 }
+
+                resource.ServerClearExtractionLock();
             }
 
             int luckySlotIndex = -1;
@@ -473,6 +541,7 @@ namespace WalaPaNameHehe
         private void NotifyExtractionFailedClientRpc(int reasonCode, ClientRpcParams clientRpcParams = default)
         {
             StopExtractionLoopSound();
+            ReleaseExtractionLockIfNeeded();
             isExtracting = false;
             extractTimer = 0f;
             currentBox = null;
@@ -480,11 +549,14 @@ namespace WalaPaNameHehe
             currentResource = null;
             hasCurrentResourceNetworkId = false;
             currentResourceNetworkId = 0;
+            currentResourcePosition = Vector3.zero;
+            currentResourceName = string.Empty;
 
             string message = reasonCode switch
             {
                 ExtractionFailNotSedated => "Target is no longer sedated",
                 ExtractionFailAlreadyDepleted => "Target already extracted",
+                ExtractionFailBusy => "A player is extracting",
                 _ => "Extraction failed"
             };
             SetTransientPrompt(message, 1.5f);
@@ -524,6 +596,97 @@ namespace WalaPaNameHehe
                     GiveRewardItemCount(rewardCount);
                 }
             }
+        }
+
+        [ServerRpc]
+        private void RequestBeginExtractionLockServerRpc(bool hasResourceNetworkId, ulong resourceNetworkId, Vector3 resourcePosition, string resourceName, ServerRpcParams rpcParams = default)
+        {
+            ulong requesterClientId = rpcParams.Receive.SenderClientId;
+            ExtractableResource resource = ResolveResourceReference(hasResourceNetworkId, resourceNetworkId, resourcePosition, resourceName);
+            if (resource == null)
+            {
+                NotifyExtractionFailedClientRpc(ExtractionFailNotFound, new ClientRpcParams
+                {
+                    Send = new ClientRpcSendParams
+                    {
+                        TargetClientIds = new[] { requesterClientId }
+                    }
+                });
+                return;
+            }
+
+            if (!resource.CanExtract)
+            {
+                NotifyExtractionFailedClientRpc(ExtractionFailNotSedated, new ClientRpcParams
+                {
+                    Send = new ClientRpcSendParams
+                    {
+                        TargetClientIds = new[] { requesterClientId }
+                    }
+                });
+                return;
+            }
+
+            if (resource.RemainingExtractionCount <= 0)
+            {
+                NotifyExtractionFailedClientRpc(ExtractionFailAlreadyDepleted, new ClientRpcParams
+                {
+                    Send = new ClientRpcSendParams
+                    {
+                        TargetClientIds = new[] { requesterClientId }
+                    }
+                });
+                return;
+            }
+
+            bool locked = resource.ServerTryBeginExtraction(requesterClientId);
+            if (!locked)
+            {
+                NotifyExtractionFailedClientRpc(ExtractionFailBusy, new ClientRpcParams
+                {
+                    Send = new ClientRpcSendParams
+                    {
+                        TargetClientIds = new[] { requesterClientId }
+                    }
+                });
+            }
+        }
+
+        [ServerRpc]
+        private void RequestCancelExtractionLockServerRpc(bool hasResourceNetworkId, ulong resourceNetworkId, Vector3 resourcePosition, string resourceName, ServerRpcParams rpcParams = default)
+        {
+            ExtractableResource resource = ResolveResourceReference(hasResourceNetworkId, resourceNetworkId, resourcePosition, resourceName);
+            if (resource == null)
+            {
+                return;
+            }
+
+            resource.ServerEndExtraction(rpcParams.Receive.SenderClientId);
+        }
+
+        private void ReleaseExtractionLockIfNeeded()
+        {
+            if (!requireExtractableResource)
+            {
+                return;
+            }
+
+            if (!IsNetworkedSessionActive())
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(currentResourceName))
+            {
+                return;
+            }
+
+            RequestCancelExtractionLockServerRpc(hasCurrentResourceNetworkId, currentResourceNetworkId, currentResourcePosition, currentResourceName);
+        }
+
+        private bool IsNetworkedSessionActive()
+        {
+            return NetworkManager != null && NetworkManager.IsListening;
         }
 
         private void StartExtractionLoopSound()
@@ -749,6 +912,11 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                return;
+            }
+
             GUIStyle centeredLabel = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
@@ -789,6 +957,21 @@ namespace WalaPaNameHehe
                 }
                 else
                 {
+                    if (requireExtractableResource
+                        && IsNetworkedSessionActive()
+                        && detectedResource != null
+                        && detectedResource.CanExtract
+                        && detectedResource.IsBeingExtracted)
+                    {
+                        ulong localClientId = NetworkManager != null ? NetworkManager.LocalClientId : ulong.MaxValue;
+                        if (detectedResource.ExtractingClientId != ulong.MaxValue && detectedResource.ExtractingClientId != localClientId)
+                        {
+                            prompt = "A player is extracting";
+                            GUI.Label(new Rect((Screen.width - 520f) * 0.5f, (Screen.height * 0.5f) + 24f, 520f, 40f), prompt, centeredLabel);
+                            return;
+                        }
+                    }
+
                     if (requireExtractableResource && detectedResource != null && !detectedResource.CanExtract)
                     {
                         prompt = "Sedate target first";

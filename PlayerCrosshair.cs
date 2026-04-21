@@ -10,9 +10,11 @@ namespace WalaPaNameHehe
         [SerializeField] private Color color = Color.white;
 
         private Texture2D pixel;
+        private PlayerMovement playerMovement;
 
         private void Awake()
         {
+            playerMovement = GetComponentInParent<PlayerMovement>();
             pixel = new Texture2D(1, 1, TextureFormat.RGBA32, false);
             pixel.SetPixel(0, 0, Color.white);
             pixel.Apply();
@@ -21,6 +23,11 @@ namespace WalaPaNameHehe
         private void OnGUI()
         {
             if (!showCrosshair || pixel == null)
+            {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
             {
                 return;
             }

@@ -20,6 +20,7 @@ namespace WalaPaNameHehe
         private GameObject detectedPickupObject;
         private Outline detectedOutline;
         private Outline lastHighlightedOutline;
+        private PlayerMovement playerMovement;
 
         private void Start()
         {
@@ -32,12 +33,25 @@ namespace WalaPaNameHehe
             {
                 inventorySystem = GetComponent<InventorySystem>();
             }
+
+            if (playerMovement == null)
+            {
+                playerMovement = GetComponent<PlayerMovement>();
+            }
         }
 
         private void Update()
         {
             if (!IsLocallyControlled())
             {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsInteractionLocked)
+            {
+                detectedPickupObject = null;
+                detectedOutline = null;
+                UpdateHoverHighlight(null);
                 return;
             }
 

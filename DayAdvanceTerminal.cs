@@ -34,6 +34,7 @@ namespace WalaPaNameHehe
         private bool isLookingAtTerminal;
         private bool useExternalDetection;
         private bool externalIsLooking;
+        private PlayerMovement localPlayerMovement;
 
         private void Update()
         {
@@ -45,6 +46,14 @@ namespace WalaPaNameHehe
 
             if (Keyboard.current == null)
             {
+                return;
+            }
+
+            ResolveLocalPlayerMovementIfNeeded();
+            if (localPlayerMovement != null && localPlayerMovement.IsInteractionLocked)
+            {
+                holdTimer = 0f;
+                isLookingAtTerminal = false;
                 return;
             }
 
@@ -86,6 +95,12 @@ namespace WalaPaNameHehe
         private void OnGUI()
         {
             if (!showUi)
+            {
+                return;
+            }
+
+            ResolveLocalPlayerMovementIfNeeded();
+            if (localPlayerMovement != null && localPlayerMovement.IsInteractionLocked)
             {
                 return;
             }
@@ -273,6 +288,43 @@ namespace WalaPaNameHehe
         public void SetExternalLooking(bool isLooking)
         {
             externalIsLooking = isLooking;
+        }
+
+        private void ResolveLocalPlayerMovementIfNeeded()
+        {
+            if (localPlayerMovement != null)
+            {
+                return;
+            }
+
+            NetworkManager nm = NetworkManager.Singleton;
+            if (nm != null && nm.IsListening && nm.LocalClient != null && nm.LocalClient.PlayerObject != null)
+            {
+                PlayerMovement ownedMovement = nm.LocalClient.PlayerObject.GetComponent<PlayerMovement>();
+                if (ownedMovement != null)
+                {
+                    localPlayerMovement = ownedMovement;
+                    return;
+                }
+            }
+
+            PlayerMovement[] players = Object.FindObjectsByType<PlayerMovement>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            for (int i = 0; i < players.Length; i++)
+            {
+                PlayerMovement player = players[i];
+                if (player == null)
+                {
+                    continue;
+                }
+
+                if (!CoopGuard.IsLocalOwnerOrOffline(player))
+                {
+                    continue;
+                }
+
+                localPlayerMovement = player;
+                return;
+            }
         }
     }
 }
