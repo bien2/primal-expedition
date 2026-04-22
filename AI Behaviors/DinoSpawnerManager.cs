@@ -1848,6 +1848,13 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            if (dm != null)
+            {
+                int secs = Mathf.FloorToInt(dm.ElapsedSeconds);
+                message = $"{message} | Threat Level: {dm.CurrentThreat} (T+{secs}s)";
+            }
+
             WalaPaNameHehe.Multiplayer.GameManager gm = WalaPaNameHehe.Multiplayer.GameManager.Instance;
             if (gm != null)
             {

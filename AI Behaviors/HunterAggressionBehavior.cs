@@ -9,7 +9,7 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
     private static bool huntOccurredThisSession = false;
     private static int huntOwnerInstanceId = 0;
     private static readonly List<Transform> EmptyPlayers = new List<Transform>(0);
-    private static DinoSpawnerManager cachedSpawner;
+    private static DinoSpawnerManagerV2 cachedSpawner;
     private const float HunterChaseDelayMin = 60f;
     private const float HunterChaseDelayMax = 85f;
     private const float HunterIsolationChaseDelay = 5f;
@@ -51,14 +51,14 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
         returnToSpawnUntilTimeByAi.Clear();
     }
 
-    private static DinoSpawnerManager GetSpawner()
+    private static DinoSpawnerManagerV2 GetSpawner()
     {
         if (cachedSpawner != null)
         {
             return cachedSpawner;
         }
 
-        cachedSpawner = Object.FindFirstObjectByType<DinoSpawnerManager>(FindObjectsInactive.Exclude);
+        cachedSpawner = Object.FindFirstObjectByType<DinoSpawnerManagerV2>(FindObjectsInactive.Exclude);
         return cachedSpawner;
     }
 
@@ -70,7 +70,7 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return false;
         }
 
-        DinoSpawnerManager spawner = GetSpawner();
+        DinoSpawnerManagerV2 spawner = GetSpawner();
         if (spawner == null)
         {
             return false;
@@ -86,7 +86,7 @@ public class HunterAggressionBehavior : DinoBehaviorRuleTemplate
             return;
         }
 
-        DinoSpawnerManager spawner = GetSpawner();
+        DinoSpawnerManagerV2 spawner = GetSpawner();
         if (spawner == null)
         {
             return;

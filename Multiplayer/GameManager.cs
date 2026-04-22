@@ -362,6 +362,7 @@ namespace WalaPaNameHehe.Multiplayer
                 dayNightTimer.SetDay(currentDay);
             }
 
+            DangerMeterManager.Instance?.StartThreatTimer();
             HunterMeterManager.Instance?.InitializeRun();
             LogMessage($"Session started. Day {currentDay}. Required samples: {requiredSamples}");
         }
@@ -1113,6 +1114,8 @@ namespace WalaPaNameHehe.Multiplayer
             {
                 dayNightTimer.SetDay(currentDay);
             }
+
+            DangerMeterManager.Instance?.StartThreatTimer();
         }
 
         [ServerRpc(RequireOwnership = false)]

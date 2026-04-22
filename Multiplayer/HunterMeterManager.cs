@@ -1,16 +1,21 @@
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace WalaPaNameHehe.Multiplayer
 {
     [DisallowMultipleComponent]
     public class HunterMeterManager : NetworkBehaviour
     {
+        public event System.Action HuntPlanChanged;
+
         public static HunterMeterManager Instance { get; private set; }
 
         [Header("Meter Settings")]
-        [SerializeField, Range(0f, 1f)] private float daytimeThreshold = 0.8f;
+        [FormerlySerializedAs("daytimeThreshold")]
+        [SerializeField, Range(0f, 1f)] private float huntThreshold = 0.8f;
+        [SerializeField] private DangerMeterManager.ThreatLevel minimumThreatToStartHunt = DangerMeterManager.ThreatLevel.Moderate;
         [SerializeField] private float apexSeenCooldownSeconds = 10f;
         [SerializeField] private float roamerEncounterCooldownSeconds = 10f;
 
@@ -30,6 +35,7 @@ namespace WalaPaNameHehe.Multiplayer
         private bool isNightRun;
         private ulong huntTargetClientId = ulong.MaxValue;
         private bool runInitialized;
+        private bool dangerMeterSubscribed;
         private readonly NetworkVariable<bool> syncedHuntPlanned = new(
             false,
             NetworkVariableReadPermission.Everyone,
@@ -63,6 +69,7 @@ namespace WalaPaNameHehe.Multiplayer
         {
             if (CoopGuard.IsServerOrOffline())
             {
+                AttachDangerMeterHandlers();
                 StartCoroutine(InitializeRunNextFrame());
             }
         }
@@ -82,6 +89,8 @@ namespace WalaPaNameHehe.Multiplayer
             {
                 NetworkManager.OnClientConnectedCallback -= HandleClientConnected;
             }
+
+            DetachDangerMeterHandlers();
             base.OnNetworkDespawn();
         }
 
@@ -106,9 +115,11 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
+            AttachDangerMeterHandlers();
             DayNightTimer dayNight = FindFirstObjectByType<DayNightTimer>(FindObjectsInactive.Exclude);
             isNightRun = dayNight != null && dayNight.IsNight;
-            SelectHuntTarget(isNightRun);
+
+            TryPlanHuntIfEligible();
             runInitialized = true;
 
             HunterAggressionBehavior.ResetSessionState();
@@ -138,7 +149,7 @@ namespace WalaPaNameHehe.Multiplayer
                 yield break;
             }
 
-            SelectHuntTarget(isNightRun);
+            TryPlanHuntIfEligible();
         }
 
         private void HandleClientConnected(ulong clientId)
@@ -203,6 +214,8 @@ namespace WalaPaNameHehe.Multiplayer
 
             player.ServerAddHunterMeter(delta);
             storedMeterByClient[clientId] = player.HunterMeterValue;
+
+            TryPlanHuntIfEligible();
         }
 
         public void ReportBloodSampleExtracted(ulong clientId)
@@ -223,6 +236,8 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             player.ServerAddHunterMeter(gainKnockdown);
+            storedMeterByClient[player.OwnerClientId] = player.HunterMeterValue;
+            TryPlanHuntIfEligible();
         }
 
         public void ReportDeath(PlayerMovement player)
@@ -233,6 +248,8 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             player.ServerAddHunterMeter(gainDeath);
+            storedMeterByClient[player.OwnerClientId] = player.HunterMeterValue;
+            TryPlanHuntIfEligible();
         }
 
         public void ReportApexSeen(Transform target)
@@ -250,6 +267,8 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             player.ServerAddHunterMeter(gainApexSeen);
+            storedMeterByClient[player.OwnerClientId] = player.HunterMeterValue;
+            TryPlanHuntIfEligible();
         }
 
         public void ReportRoamerEncounter(Transform target)
@@ -267,6 +286,8 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             player.ServerAddHunterMeter(gainRoamerEncounter);
+            storedMeterByClient[player.OwnerClientId] = player.HunterMeterValue;
+            TryPlanHuntIfEligible();
         }
 
         public void OnHunterKill()
@@ -279,6 +300,8 @@ namespace WalaPaNameHehe.Multiplayer
                 syncedHuntPlanned.Value = false;
                 syncedHuntTargetClientId.Value = ulong.MaxValue;
             }
+
+            HuntPlanChanged?.Invoke();
         }
 
         public void ResetAllMeters()
@@ -329,8 +352,11 @@ namespace WalaPaNameHehe.Multiplayer
             }
         }
 
-        private void SelectHuntTarget(bool night)
+        private void SelectHuntTarget()
         {
+            bool wasPlanned = huntPlanned;
+            ulong wasTarget = huntTargetClientId;
+
             huntPlanned = false;
             huntTargetClientId = ulong.MaxValue;
 
@@ -341,19 +367,12 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             List<PlayerMovement> candidates = new();
-            if (night)
+            for (int i = 0; i < players.Count; i++)
             {
-                candidates.AddRange(players);
-            }
-            else
-            {
-                for (int i = 0; i < players.Count; i++)
+                PlayerMovement player = players[i];
+                if (player != null && player.HunterMeterValue >= huntThreshold)
                 {
-                    PlayerMovement player = players[i];
-                    if (player != null && player.HunterMeterValue >= daytimeThreshold)
-                    {
-                        candidates.Add(player);
-                    }
+                    candidates.Add(player);
                 }
             }
 
@@ -362,21 +381,14 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            PlayerMovement target = ChooseWeightedTarget(candidates, night);
+            PlayerMovement target = ChooseWeightedTarget(candidates);
             if (target == null)
             {
                 return;
             }
 
             float meter = Mathf.Clamp01(target.HunterMeterValue);
-            if (night)
-            {
-                huntPlanned = true;
-            }
-            else
-            {
-                huntPlanned = Random.value <= meter;
-            }
+            huntPlanned = Random.value <= meter;
 
             if (huntPlanned)
             {
@@ -388,9 +400,14 @@ namespace WalaPaNameHehe.Multiplayer
                 syncedHuntPlanned.Value = huntPlanned;
                 syncedHuntTargetClientId.Value = huntTargetClientId;
             }
+
+            if (wasPlanned != huntPlanned || wasTarget != huntTargetClientId)
+            {
+                HuntPlanChanged?.Invoke();
+            }
         }
 
-        private PlayerMovement ChooseWeightedTarget(List<PlayerMovement> candidates, bool night)
+        private PlayerMovement ChooseWeightedTarget(List<PlayerMovement> candidates)
         {
             List<PlayerMovement> hundred = new();
             for (int i = 0; i < candidates.Count; i++)
@@ -440,6 +457,99 @@ namespace WalaPaNameHehe.Multiplayer
             }
 
             return candidates[0];
+        }
+
+        private void AttachDangerMeterHandlers()
+        {
+            if (dangerMeterSubscribed)
+            {
+                return;
+            }
+
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            if (dm == null)
+            {
+                return;
+            }
+
+            dm.ThreatLevelUpdated -= HandleThreatLevelUpdated;
+            dm.ThreatLevelUpdated += HandleThreatLevelUpdated;
+            dangerMeterSubscribed = true;
+        }
+
+        private void DetachDangerMeterHandlers()
+        {
+            if (!dangerMeterSubscribed)
+            {
+                return;
+            }
+
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            if (dm != null)
+            {
+                dm.ThreatLevelUpdated -= HandleThreatLevelUpdated;
+            }
+
+            dangerMeterSubscribed = false;
+        }
+
+        private void HandleThreatLevelUpdated(DangerMeterManager.ThreatLevel level)
+        {
+            if (!CoopGuard.IsServerOrOffline())
+            {
+                return;
+            }
+
+            if (level < minimumThreatToStartHunt)
+            {
+                CancelHuntPlan();
+                return;
+            }
+
+            TryPlanHuntIfEligible();
+        }
+
+        private void TryPlanHuntIfEligible()
+        {
+            if (!CoopGuard.IsServerOrOffline())
+            {
+                return;
+            }
+
+            AttachDangerMeterHandlers();
+            if (huntPlanned)
+            {
+                return;
+            }
+
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            DangerMeterManager.ThreatLevel threat = dm != null ? dm.CurrentThreat : DangerMeterManager.ThreatLevel.Low;
+            if (threat < minimumThreatToStartHunt)
+            {
+                return;
+            }
+
+            SelectHuntTarget();
+        }
+
+        private void CancelHuntPlan()
+        {
+            bool wasPlanned = huntPlanned;
+            ulong wasTarget = huntTargetClientId;
+
+            huntPlanned = false;
+            huntTargetClientId = ulong.MaxValue;
+
+            if (IsServer)
+            {
+                syncedHuntPlanned.Value = false;
+                syncedHuntTargetClientId.Value = ulong.MaxValue;
+            }
+
+            if (wasPlanned || wasTarget != ulong.MaxValue)
+            {
+                HuntPlanChanged?.Invoke();
+            }
         }
 
         private bool IsOnCooldown(Dictionary<ulong, float> cooldowns, ulong clientId, float duration)
