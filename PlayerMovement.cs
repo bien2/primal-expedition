@@ -48,6 +48,9 @@ namespace WalaPaNameHehe
         [SerializeField] private float neckMaxPitch = 45f;
         [SerializeField] private float neckSmoothing = 16f;
 
+        [Header("Seat Look")]
+        [SerializeField, Range(0f, 180f)] private float seatedLookYawLimit = 90f;
+
         [Header("Camera Bob")]
         [SerializeField] private bool enableCameraBob = true;
         [SerializeField] private float walkBobFrequency = 7.5f;
@@ -82,9 +85,12 @@ namespace WalaPaNameHehe
         [Header("Jump")]
         [SerializeField] private float jumpForce = 6f;
         [SerializeField] private LayerMask groundLayers = ~0;
-        [SerializeField] private float minGroundNormalY = 0.5f;
         [SerializeField] private float coyoteTime = 0.1f;
         [SerializeField] private float jumpBufferTime = 0.1f;
+
+        [Header("Slope")]
+        [SerializeField, Range(0f, 1f)] private float minGroundNormalY = 0.7f;
+        [SerializeField] private float slopeProbeDistance = 0.25f;
 
         [Header("Water")]
         [SerializeField] private bool enableWaterBuoyancy = true;
@@ -131,14 +137,21 @@ namespace WalaPaNameHehe
         [SerializeField] private string onDroneParam = "OnDrone";
         [SerializeField] private float movingThreshold = 0.1f;
 
+        [Header("Ladder")]
+        [Min(0f)]
+        [SerializeField] private float ladderClimbSpeed = 3.5f;
+
         private Rigidbody rb;
         private CapsuleCollider bodyCapsule;
         [SerializeField] private PlayerRagdollController ragdollController;
         private Vector2 moveInput;
         private float pitch;
         private float currentNeckPitch;
+        private float currentNeckYaw;
         private float targetNeckPitch;
+        private float targetNeckYaw;
         private bool isSprinting;
+        private bool suppressSprint;
         private float coyoteTimer;
         private float jumpBufferTimer;
         private Quaternion neckBaseLocalRotation = Quaternion.identity;
@@ -169,12 +182,22 @@ namespace WalaPaNameHehe
         private bool grabbedWasKinematic;
         private bool grabbedWasGravity;
         private bool suppressJump;
+        private bool isOnLadder;
+        private float currentLadderClimbSpeed;
+        private bool isSeated;
+        private Transform seatedSeatPoint;
+        private float seatedYaw;
+        private Quaternion seatedYawOffset = Quaternion.identity;
         private readonly HashSet<int> waterTriggerIds = new();
         private float currentWaterSurfaceY;
         private float cachedDefaultDrag;
         private bool isWaterAffectingCached;
         private PovMode localPovMode = PovMode.Main;
         private readonly NetworkVariable<float> syncedPitch = new(
+            0f,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Owner);
+        private readonly NetworkVariable<float> syncedSeatedYaw = new(
             0f,
             NetworkVariableReadPermission.Everyone,
             NetworkVariableWritePermission.Owner);
@@ -383,6 +406,15 @@ namespace WalaPaNameHehe
                 hasDeadSinceLocal = false;
             }
 
+            if (isSeated)
+            {
+                moveInput = Vector2.zero;
+                isSprinting = false;
+                HandleLook();
+                UpdateJumpTimers();
+                return;
+            }
+
             if (movementSuppressed)
             {
                 moveInput = Vector2.zero;
@@ -397,9 +429,9 @@ namespace WalaPaNameHehe
 
             ReadMoveInput();
             if (temporarySpeedMultiplier < 0.999f)
-            {
-                isSprinting = false;
-            }
+         {
+             isSprinting = false;
+         }
             HandleLook();
             UpdateJumpTimers();
             TryJump();
@@ -422,6 +454,16 @@ namespace WalaPaNameHehe
             }
 
             if (isGrabbed)
+            {
+                if (rb != null)
+                {
+                    rb.linearVelocity = Vector3.zero;
+                    rb.angularVelocity = Vector3.zero;
+                }
+                return;
+            }
+
+            if (isSeated)
             {
                 if (rb != null)
                 {
@@ -457,6 +499,12 @@ namespace WalaPaNameHehe
                 return;
             }
 
+            if (isOnLadder)
+            {
+                HandleLadderClimb();
+                return;
+            }
+
          if (temporarySpeedMultiplier < 0.999f)
          {
              isSprinting = false;
@@ -472,6 +520,7 @@ namespace WalaPaNameHehe
          currentMoveSpeed *= Mathf.Max(0.01f, combinedMultiplier);
          Vector3 moveDirection = (transform.right * moveInput.x + transform.forward * moveInput.y).normalized;
              Vector3 targetHorizontalVelocity = moveDirection * currentMoveSpeed;
+            targetHorizontalVelocity = ApplySlopeLimit(targetHorizontalVelocity);
             targetHorizontalVelocity = ApplySoftPlayerBlock(targetHorizontalVelocity);
 
             Vector3 currentVelocity = rb.linearVelocity;
@@ -483,6 +532,193 @@ namespace WalaPaNameHehe
              ApplyWaterBuoyancy();
              UpdateAnimation(newHorizontalVelocity.magnitude);
          }
+
+        private void HandleLadderClimb()
+        {
+            if (rb == null || rb.isKinematic)
+            {
+                return;
+            }
+
+            rb.useGravity = false;
+
+            float speed = currentLadderClimbSpeed > 0.0001f ? currentLadderClimbSpeed : Mathf.Max(0f, ladderClimbSpeed);
+            float input = moveInput.y;
+            float yVel = input * speed;
+
+            float strafeSpeed = Mathf.Max(0.01f, moveSpeed) * Mathf.Max(0.01f, externalSpeedMultiplier * temporarySpeedMultiplier);
+            Vector3 strafe = transform.right * moveInput.x * strafeSpeed;
+
+            Vector3 vel = rb.linearVelocity;
+            vel.x = strafe.x;
+            vel.z = strafe.z;
+            vel.y = yVel;
+            rb.linearVelocity = vel;
+            rb.angularVelocity = Vector3.zero;
+
+            UpdateAnimation(new Vector3(vel.x, 0f, vel.z).magnitude);
+        }
+
+        public void SetLadderClimb(bool isInside, float climbSpeed)
+        {
+            if (IsNetworkActive() && !IsOwner)
+            {
+                return;
+            }
+
+            isOnLadder = isInside;
+            currentLadderClimbSpeed = climbSpeed > 0.0001f ? climbSpeed : ladderClimbSpeed;
+
+            if (rb == null)
+            {
+                return;
+            }
+
+            if (isOnLadder)
+            {
+                rb.useGravity = false;
+
+                rb.angularVelocity = Vector3.zero;
+            }
+            else
+            {
+                rb.useGravity = true;
+
+                Vector3 vel = rb.linearVelocity;
+                if (vel.y > 0f)
+                {
+                    vel.y = 0f;
+                }
+                rb.linearVelocity = vel;
+            }
+        }
+
+        public bool IsSeated => isSeated;
+
+        public void SetSeated(bool seated, Transform seatPoint, float yawOffsetDegrees)
+        {
+            if (seated)
+            {
+                seatedSeatPoint = seatPoint;
+                seatedYaw = 0f;
+                seatedYawOffset = Quaternion.Euler(0f, yawOffsetDegrees, 0f);
+            }
+            else
+            {
+                seatedSeatPoint = null;
+                seatedYaw = 0f;
+                seatedYawOffset = Quaternion.identity;
+            }
+
+            targetNeckYaw = 0f;
+
+            isSeated = seated;
+            moveInput = Vector2.zero;
+            isSprinting = false;
+            jumpBufferTimer = 0f;
+
+            if (rb == null)
+            {
+                return;
+            }
+
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+
+            if (isSeated)
+            {
+                rb.useGravity = false;
+                rb.isKinematic = true;
+
+                if (seatedSeatPoint != null)
+                {
+                    rb.position = seatedSeatPoint.position;
+                    rb.rotation = seatedSeatPoint.rotation * seatedYawOffset;
+                }
+            }
+            else
+            {
+                ApplyPhysicsAuthorityMode();
+            }
+        }
+
+        private Vector3 ApplySlopeLimit(Vector3 targetHorizontalVelocity)
+        {
+            if (targetHorizontalVelocity.sqrMagnitude <= 0.000001f)
+            {
+                return targetHorizontalVelocity;
+            }
+
+            if (!TryGetGroundHit(out RaycastHit hit))
+            {
+                return targetHorizontalVelocity;
+            }
+
+            Vector3 normal = hit.normal;
+            if (normal.y >= minGroundNormalY)
+            {
+                return targetHorizontalVelocity;
+            }
+
+            Vector3 uphillOnPlane = Vector3.ProjectOnPlane(Vector3.up, normal);
+            Vector3 uphillHorizontal = Vector3.ProjectOnPlane(uphillOnPlane, Vector3.up);
+            if (uphillHorizontal.sqrMagnitude <= 0.000001f)
+            {
+                return targetHorizontalVelocity;
+            }
+
+            uphillHorizontal.Normalize();
+            float intoUphill = Vector3.Dot(targetHorizontalVelocity, uphillHorizontal);
+            if (intoUphill > 0f)
+            {
+                targetHorizontalVelocity -= uphillHorizontal * intoUphill;
+            }
+
+            return targetHorizontalVelocity;
+        }
+
+        private bool TryGetGroundHit(out RaycastHit hit)
+        {
+            hit = default;
+
+            if (rb == null)
+            {
+                return false;
+            }
+
+            float probeDistance = Mathf.Max(0.01f, slopeProbeDistance);
+
+            if (bodyCapsule == null)
+            {
+                return Physics.Raycast(
+                    rb.position + Vector3.up * 0.05f,
+                    Vector3.down,
+                    out hit,
+                    probeDistance + 0.1f,
+                    groundLayers,
+                    QueryTriggerInteraction.Ignore);
+            }
+
+            Vector3 center = transform.TransformPoint(bodyCapsule.center);
+            float scaleX = Mathf.Abs(transform.lossyScale.x);
+            float scaleY = Mathf.Abs(transform.lossyScale.y);
+            float scaleZ = Mathf.Abs(transform.lossyScale.z);
+            float radius = bodyCapsule.radius * Mathf.Max(scaleX, scaleZ);
+            float halfHeight = Mathf.Max(radius, (bodyCapsule.height * scaleY * 0.5f) - radius);
+            Vector3 axis = transform.up * halfHeight;
+            Vector3 p1 = center + axis;
+            Vector3 p2 = center - axis;
+
+            return Physics.CapsuleCast(
+                p1,
+                p2,
+                radius,
+                Vector3.down,
+                out hit,
+                probeDistance,
+                groundLayers,
+                QueryTriggerInteraction.Ignore);
+        }
 
         private void ApplyWaterBuoyancy()
         {
@@ -697,7 +933,7 @@ namespace WalaPaNameHehe
             if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) y -= 1f;
 
             moveInput = new Vector2(x, y).normalized;
-            isSprinting = Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
+            isSprinting = !suppressSprint && (Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed);
 
             if (Keyboard.current.spaceKey.wasPressedThisFrame)
             {
@@ -720,7 +956,15 @@ namespace WalaPaNameHehe
             float yaw = mouseDelta.x * lookSensitivity;
             float pitchDelta = mouseDelta.y * lookSensitivity;
 
-            transform.Rotate(Vector3.up * yaw);
+            if (isSeated)
+            {
+                float limit = Mathf.Clamp(seatedLookYawLimit, 0f, 180f);
+                seatedYaw = Mathf.Clamp(seatedYaw + yaw, -limit, limit);
+            }
+            else
+            {
+                transform.Rotate(Vector3.up * yaw);
+            }
 
             pitch -= pitchDelta;
             pitch = Mathf.Clamp(pitch, minPitch, maxPitch);
@@ -729,21 +973,23 @@ namespace WalaPaNameHehe
             {
                 cameraPivot.localEulerAngles = new Vector3(
                     pitch,
-                    0f,
+                    isSeated ? seatedYaw : 0f,
                     0f);
             }
 
             // Optional world-space pitch pivot so remote clients can see up/down aiming.
             if (networkPitchPivot != null)
             {
-                networkPitchPivot.localEulerAngles = new Vector3(pitch, 0f, 0f);
+                networkPitchPivot.localEulerAngles = new Vector3(pitch, isSeated ? seatedYaw : 0f, 0f);
             }
 
             targetNeckPitch = Mathf.Clamp(pitch * neckFollowAmount, neckMinPitch, neckMaxPitch);
+            targetNeckYaw = isSeated ? seatedYaw : 0f;
 
             if (IsNetworkActive() && IsOwner)
             {
                 syncedPitch.Value = pitch;
+                syncedSeatedYaw.Value = isSeated ? seatedYaw : 0f;
             }
         }
 
@@ -756,6 +1002,11 @@ namespace WalaPaNameHehe
         private void TryJump()
         {
             if (Keyboard.current == null)
+            {
+                return;
+            }
+
+            if (isOnLadder)
             {
                 return;
             }
@@ -915,6 +1166,22 @@ namespace WalaPaNameHehe
 
         private void LateUpdate()
         {
+            if (isSeated && seatedSeatPoint != null)
+            {
+                Quaternion finalRotation = seatedSeatPoint.rotation * seatedYawOffset;
+                if (rb != null)
+                {
+                    rb.linearVelocity = Vector3.zero;
+                    rb.angularVelocity = Vector3.zero;
+                    rb.position = seatedSeatPoint.position;
+                    rb.rotation = finalRotation;
+                }
+                else
+                {
+                    transform.SetPositionAndRotation(seatedSeatPoint.position, finalRotation);
+                }
+            }
+
             ApplyNeckLook();
         }
 
@@ -1232,7 +1499,8 @@ namespace WalaPaNameHehe
 
             float t = 1f - Mathf.Exp(-neckSmoothing * Time.deltaTime);
             currentNeckPitch = Mathf.Lerp(currentNeckPitch, targetNeckPitch, t);
-            neckBone.localRotation = neckBaseLocalRotation * Quaternion.Euler(currentNeckPitch, 0f, 0f);
+            currentNeckYaw = Mathf.Lerp(currentNeckYaw, targetNeckYaw, t);
+            neckBone.localRotation = neckBaseLocalRotation * Quaternion.Euler(currentNeckPitch, currentNeckYaw, 0f);
         }
 
         private void ApplyRemotePitch()
@@ -1240,9 +1508,21 @@ namespace WalaPaNameHehe
             pitch = Mathf.Clamp(syncedPitch.Value, minPitch, maxPitch);
             targetNeckPitch = Mathf.Clamp(pitch * neckFollowAmount, neckMinPitch, neckMaxPitch);
 
+            if (isSeated)
+            {
+                float limit = Mathf.Clamp(seatedLookYawLimit, 0f, 180f);
+                seatedYaw = Mathf.Clamp(syncedSeatedYaw.Value, -limit, limit);
+                targetNeckYaw = seatedYaw;
+            }
+            else
+            {
+                seatedYaw = 0f;
+                targetNeckYaw = 0f;
+            }
+
             if (networkPitchPivot != null)
             {
-                networkPitchPivot.localEulerAngles = new Vector3(pitch, 0f, 0f);
+                networkPitchPivot.localEulerAngles = new Vector3(pitch, isSeated ? seatedYaw : 0f, 0f);
             }
         }
 
@@ -1360,6 +1640,15 @@ namespace WalaPaNameHehe
                 moveInput = Vector2.zero;
                 isSprinting = false;
                 jumpBufferTimer = 0f;
+            }
+        }
+
+        public void SetSprintSuppressed(bool suppressed)
+        {
+            suppressSprint = suppressed;
+            if (suppressed)
+            {
+                isSprinting = false;
             }
         }
 

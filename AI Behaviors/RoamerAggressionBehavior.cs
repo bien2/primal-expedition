@@ -9,6 +9,7 @@ public class RoamerAggressionBehavior : DinoBehaviorRuleTemplate
     private const float FleeStuckMinDistance = 0.5f;
     private const float SoundSeekSeconds = 6f;
     private static readonly Dictionary<int, float> nextRoarAllowedTime = new();
+    private static readonly Dictionary<int, bool> hasReactedToPlayer = new();
     private static readonly Dictionary<int, float> fleeUntilTime = new();
     private static readonly Dictionary<int, Vector3> fleeFromPosition = new();
     private static readonly Dictionary<int, Vector3> lastFleePosition = new();
@@ -99,6 +100,11 @@ public class RoamerAggressionBehavior : DinoBehaviorRuleTemplate
             return false;
         }
 
+        if (ai.IsJumpAttacking)
+        {
+            return true;
+        }
+
         float scanRadius = Mathf.Max(0f, ai.detectionRadius);
         if (scanRadius <= 0f)
         {
@@ -118,6 +124,17 @@ public class RoamerAggressionBehavior : DinoBehaviorRuleTemplate
         if (ai.IsServer)
         {
             HunterMeterManager.Instance?.ReportRoamerEncounter(target);
+        }
+
+        int key = ai.GetInstanceID();
+        if (!hasReactedToPlayer.ContainsKey(key))
+        {
+            hasReactedToPlayer[key] = true;
+            float chance = Mathf.Clamp01(ai.roamerPlungeChance);
+            if (chance > 0f && Random.value < chance)
+            {
+                ai.SetRoamerPendingPlunge(target);
+            }
         }
 
         ai.StartFleeToDespawnPoint(true);
@@ -292,5 +309,6 @@ public class RoamerAggressionBehavior : DinoBehaviorRuleTemplate
         lastFleeSampleTime.Remove(key);
         soundSeekUntilTime.Remove(key);
         soundSeekDestination.Remove(key);
+        hasReactedToPlayer.Remove(key);
     }
 }

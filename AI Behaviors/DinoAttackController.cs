@@ -11,7 +11,15 @@ public class DinoAttackController : NetworkBehaviour
         Grab
     }
 
-    [Header("Attack")]
+    [SerializeField] private bool enableAttack = true;
+    [Min(0f)] [SerializeField] private float attackRadius = 1.2f;
+    [Min(0.01f)] [SerializeField] private float attackCheckInterval = 0.1f;
+
+    [SerializeField] private bool enableJumpAttack = true;
+    [Min(0f)] [SerializeField] private float jumpAttackRadius = 1.5f;
+    [Min(0.05f)] [SerializeField] private float jumpAttackDurationSeconds = 0.60f;
+    [Min(0f)] [SerializeField] private float jumpAttackHeight = 4.0f;
+
     [SerializeField] private AttackEffect attackEffect = AttackEffect.Instakill;
     [SerializeField] private float attackCooldown = 1.5f;
     [SerializeField] private float attackWindupSeconds = 0.15f;
@@ -20,11 +28,9 @@ public class DinoAttackController : NetworkBehaviour
     [SerializeField] private float knockbackImpulse = 6f;
     [SerializeField] private float knockbackUpward = 1.2f;
 
-    [Header("Blackout")]
     [SerializeField] private bool useBlackoutOnInstakill = true;
     [Min(0f)] [SerializeField] private float blackoutDelaySeconds = 1f;
 
-    [Header("Animation")]
     [SerializeField] private Animator animator;
     [SerializeField] private string attackStateName = "Attack";
     [SerializeField] private Transform bitePoint;
@@ -37,6 +43,16 @@ public class DinoAttackController : NetworkBehaviour
     private DinoAI dinoAi;
     private WalaPaNameHehe.PlayerMovement lastAttackTarget;
 
+    [HideInInspector] [SerializeField] private bool migratedAttackSettings;
+
+    public bool EnableAttack => enableAttack;
+    public float AttackRadius => Mathf.Max(0f, attackRadius);
+    public float AttackCheckInterval => Mathf.Max(0.01f, attackCheckInterval);
+    public bool EnableJumpAttack => enableJumpAttack;
+    public float JumpAttackRadius => Mathf.Max(0f, jumpAttackRadius);
+    public float JumpAttackDurationSeconds => Mathf.Max(0.05f, jumpAttackDurationSeconds);
+    public float JumpAttackHeight => Mathf.Max(0f, jumpAttackHeight);
+
     private void Awake()
     {
         if (animator == null)
@@ -45,6 +61,32 @@ public class DinoAttackController : NetworkBehaviour
         }
         dinoAi = GetComponent<DinoAI>();
     }
+
+#if UNITY_EDITOR
+    private void OnValidate()
+    {
+        if (migratedAttackSettings)
+        {
+            return;
+        }
+
+        DinoAI ai = GetComponent<DinoAI>();
+        if (ai == null)
+        {
+            return;
+        }
+
+        enableAttack = ai.enableAttackKill;
+        attackRadius = ai.attackKillRadius;
+        attackCheckInterval = ai.attackCheckInterval;
+        enableJumpAttack = ai.enableJumpAttack;
+        jumpAttackRadius = ai.jumpAttackRadius;
+        jumpAttackDurationSeconds = ai.jumpAttackDurationSeconds;
+        jumpAttackHeight = ai.jumpAttackHeight;
+
+        migratedAttackSettings = true;
+    }
+#endif
 
     public bool TryAttackTarget(WalaPaNameHehe.PlayerMovement target)
     {
@@ -201,7 +243,7 @@ public class DinoAttackController : NetworkBehaviour
                     string path = BuildRelativePath(transform, bitePoint);
                     if (dinoAi != null && dinoAi.aggressionType == DinoAI.AggressionType.Plunderer)
                     {
-                        hitHandler.ServerBeginGrabHold(netObj.NetworkObjectId, path, holdSeconds, 5f);
+                        hitHandler.ServerBeginGrabHold(netObj.NetworkObjectId, path, holdSeconds, true);
                     }
                     else
                     {
@@ -358,7 +400,7 @@ public class DinoAttackController : NetworkBehaviour
 
     private WalaPaNameHehe.PlayerMovement FindNearestPlayerInRange()
     {
-        float range = dinoAi != null ? Mathf.Max(0.5f, dinoAi.attackKillRadius * 2f) : 2f;
+        float range = Mathf.Max(0.5f, GetAttackRange() * 2f);
         WalaPaNameHehe.PlayerMovement[] players = FindObjectsByType<WalaPaNameHehe.PlayerMovement>(
             FindObjectsInactive.Exclude,
             FindObjectsSortMode.None);
@@ -472,9 +514,9 @@ public class DinoAttackController : NetworkBehaviour
 
     private float GetAttackRange()
     {
-        if (dinoAi != null && dinoAi.attackKillRadius > 0f)
+        if (attackRadius > 0f)
         {
-            return dinoAi.attackKillRadius;
+            return attackRadius;
         }
 
         return validateRange;

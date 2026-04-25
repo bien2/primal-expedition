@@ -1,8 +1,8 @@
 using System.Collections;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using Unity.Netcode;
 using WalaPaNameHehe.Multiplayer;
+using UnityEngine.Serialization;
 
 namespace WalaPaNameHehe
 {
@@ -17,17 +17,8 @@ namespace WalaPaNameHehe
 
         [Header("Down State")]
         [SerializeField] private float downedMoveMultiplier = 0.35f;
-        [SerializeField] private float reviveHoldSeconds = 10f;
-        [SerializeField] private float reviveRange = 2f;
-        [SerializeField] private float revivePulseInterval = 0.1f;
-        [SerializeField] private LayerMask playerMask = 0;
-        [SerializeField] private float autoRecoverSeconds = 0f;
-
-        [Header("Instakill Audio")]
-        [SerializeField] private AudioSource instakillDeathAudioSource;
-        [SerializeField] private AudioClip[] instakillDeathClips;
-        [SerializeField, Range(0f, 1f)] private float instakillDeathVolume = 1f;
-        [SerializeField] private Vector2 instakillDeathPitchRange = new Vector2(0.95f, 1.05f);
+        [FormerlySerializedAs("autoRecoverSeconds")]
+        [SerializeField] private float downStateDurationSeconds = 0f;
 
         private readonly NetworkVariable<bool> syncedIsDowned = new(
             false,
@@ -37,28 +28,22 @@ namespace WalaPaNameHehe
         private PlayerMovement playerMovement;
         private PlayerRagdollController ragdollController;
         private PlayerDeathBlackout deathBlackout;
-        private float nextRevivePulseTime;
-        private bool isReviving;
-        private PlayerHitHandler currentReviveTarget;
-
-        private ulong activeReviverClientId = ulong.MaxValue;
-        private float reviveProgressSeconds;
-        private float lastReviveTickTime;
         private Coroutine biteHoldRoutine;
         private bool isGrabbedHold;
         private bool isGrabHoldActive;
         private bool isRagdollHoldActive;
         private bool lastHoldUsedRagdoll;
         private Transform grabHoldPoint;
-        private bool pendingDropRagdollOnRelease;
-        private float pendingDropRagdollDuration;
+        private bool pendingDownStateOnRelease;
+        private bool pendingDownStateOnImpact;
+        private Transform pendingDownStateIgnoreRoot;
         private InventorySystem inventorySystem;
         private WeaponDrone weaponDrone;
-        private Coroutine dropRagdollRoutine;
         private Coroutine autoRecoverRoutine;
         private Coroutine pendingInstakillRoutine;
+        private bool downedSubscribed;
 
-        public bool IsDowned => IsNetworkActive() ? syncedIsDowned.Value : false;
+        public bool IsDowned => syncedIsDowned.Value;
 
         private void Awake()
         {
@@ -73,146 +58,110 @@ namespace WalaPaNameHehe
             {
                 deathBlackout = GetComponentInChildren<PlayerDeathBlackout>(true);
             }
-            if (playerMask == 0)
-            {
-                playerMask = LayerMask.GetMask("Player");
-            }
 
-            if (instakillDeathAudioSource == null)
-            {
-                instakillDeathAudioSource = GetComponent<AudioSource>();
-                if (instakillDeathAudioSource == null)
-                {
-                    instakillDeathAudioSource = GetComponentInChildren<AudioSource>(true);
-                }
-            }
+            SubscribeDownedChanged();
+            ApplyDownedState(syncedIsDowned.Value);
         }
 
         public override void OnNetworkSpawn()
         {
             base.OnNetworkSpawn();
-            syncedIsDowned.OnValueChanged += HandleDownedChanged;
             ApplyDownedState(syncedIsDowned.Value);
         }
 
         public override void OnNetworkDespawn()
         {
-            syncedIsDowned.OnValueChanged -= HandleDownedChanged;
             base.OnNetworkDespawn();
+        }
+
+        private void OnDestroy()
+        {
+            UnsubscribeDownedChanged();
         }
 
         private void Update()
         {
-            if (IsNetworkActive() && IsServer && syncedIsDowned.Value && playerMovement != null && playerMovement.IsDead)
+            if (syncedIsDowned.Value && playerMovement != null && playerMovement.IsDead && IsAuthoritative())
             {
-                syncedIsDowned.Value = false;
+                SetDowned(false);
             }
-
-            if (!IsNetworkActive() || !IsOwner)
-            {
-                return;
-            }
-
-            if (playerMovement == null || playerMovement.IsDead || IsDowned)
-            {
-                CancelReviveIfNeeded();
-                return;
-            }
-
-            if (playerMovement.IsInteractionLocked)
-            {
-                CancelReviveIfNeeded();
-                return;
-            }
-
-            if (Keyboard.current == null)
-            {
-                return;
-            }
-
-            bool wantsRevive = Keyboard.current.eKey.isPressed;
-            if (!wantsRevive)
-            {
-                CancelReviveIfNeeded();
-                return;
-            }
-
-            PlayerHitHandler target = FindClosestDownedTarget();
-            if (target == null)
-            {
-                CancelReviveIfNeeded();
-                return;
-            }
-
-            if (currentReviveTarget != target)
-            {
-                CancelReviveIfNeeded();
-                currentReviveTarget = target;
-            }
-
-            if (Time.unscaledTime < nextRevivePulseTime)
-            {
-                return;
-            }
-
-            currentReviveTarget.RequestReviveServerRpc(true);
-            nextRevivePulseTime = Time.unscaledTime + Mathf.Max(0.02f, revivePulseInterval);
-            isReviving = true;
         }
 
-        private void OnDisable()
+        private void OnCollisionEnter(Collision collision)
         {
-            CancelReviveIfNeeded();
-        }
-
-        private void CancelReviveIfNeeded()
-        {
-            if (!isReviving || currentReviveTarget == null)
+            if (!pendingDownStateOnImpact)
             {
-                isReviving = false;
-                currentReviveTarget = null;
                 return;
             }
 
-            currentReviveTarget.RequestReviveServerRpc(false);
-            isReviving = false;
-            currentReviveTarget = null;
-        }
-
-        private PlayerHitHandler FindClosestDownedTarget()
-        {
-            float radius = Mathf.Max(0.1f, reviveRange);
-            Collider[] hits = Physics.OverlapSphere(transform.position, radius, playerMask, QueryTriggerInteraction.Ignore);
-            if (hits == null || hits.Length == 0)
+            if (collision == null || collision.contactCount <= 0)
             {
-                return null;
+                return;
             }
 
-            PlayerHitHandler closest = null;
-            float bestSqr = float.MaxValue;
-            for (int i = 0; i < hits.Length; i++)
+            if (pendingDownStateIgnoreRoot != null)
             {
-                Collider hit = hits[i];
-                if (hit == null)
+                Transform otherRoot = collision.collider != null ? collision.collider.transform.root : collision.transform.root;
+                if (otherRoot == pendingDownStateIgnoreRoot)
                 {
-                    continue;
-                }
-
-                PlayerHitHandler handler = hit.GetComponentInParent<PlayerHitHandler>();
-                if (handler == null || handler == this || !handler.IsDowned)
-                {
-                    continue;
-                }
-
-                float sqr = (handler.transform.position - transform.position).sqrMagnitude;
-                if (sqr < bestSqr)
-                {
-                    bestSqr = sqr;
-                    closest = handler;
+                    return;
                 }
             }
 
-            return closest;
+            if (IsNetworkActive() && !IsOwner && !IsServer)
+            {
+                return;
+            }
+
+            if (playerMovement != null && playerMovement.IsGrabbed)
+            {
+                return;
+            }
+
+            pendingDownStateOnImpact = false;
+            pendingDownStateIgnoreRoot = null;
+            ApplyTemporaryDownStateNow(downStateDurationSeconds);
+        }
+
+        private bool IsAuthoritative()
+        {
+            return !IsNetworkActive() || IsServer;
+        }
+
+        private void SubscribeDownedChanged()
+        {
+            if (downedSubscribed)
+            {
+                return;
+            }
+
+            syncedIsDowned.OnValueChanged += HandleDownedChanged;
+            downedSubscribed = true;
+        }
+
+        private void UnsubscribeDownedChanged()
+        {
+            if (!downedSubscribed)
+            {
+                return;
+            }
+
+            syncedIsDowned.OnValueChanged -= HandleDownedChanged;
+            downedSubscribed = false;
+        }
+
+        private void SetDowned(bool isDowned)
+        {
+            if (syncedIsDowned.Value == isDowned)
+            {
+                return;
+            }
+
+            syncedIsDowned.Value = isDowned;
+            if (!IsNetworkActive())
+            {
+                ApplyDownedState(isDowned);
+            }
         }
 
         private void HandleDownedChanged(bool previous, bool next)
@@ -225,20 +174,6 @@ namespace WalaPaNameHehe
             if (playerMovement == null)
             {
                 return;
-            }
-
-            if (ragdollController == null)
-            {
-                ragdollController = GetComponent<PlayerRagdollController>();
-                if (ragdollController == null)
-                {
-                    ragdollController = GetComponentInChildren<PlayerRagdollController>(true);
-                }
-            }
-
-            if (ragdollController != null)
-            {
-                ragdollController.SetDownedRagdoll(isDowned);
             }
 
             if (isDowned)
@@ -259,6 +194,7 @@ namespace WalaPaNameHehe
                 playerMovement.SetExternalSpeedMultiplier(1f);
             }
 
+            playerMovement.SetSprintSuppressed(isDowned);
             UpdateIncapacitationLocal();
         }
 
@@ -279,10 +215,8 @@ namespace WalaPaNameHehe
                 Debug.Log($"PlayerHitHandler: Instakill applied to '{name}'.");
                 if (syncedIsDowned.Value)
                 {
-                    syncedIsDowned.Value = false;
+                    SetDowned(false);
                 }
-
-                TriggerInstakillDeathSound();
                 return playerMovement.ServerKill();
             }
 
@@ -291,10 +225,7 @@ namespace WalaPaNameHehe
                 return false;
             }
 
-            syncedIsDowned.Value = true;
-            activeReviverClientId = ulong.MaxValue;
-            reviveProgressSeconds = 0f;
-            lastReviveTickTime = Time.time;
+            SetDowned(true);
             WalaPaNameHehe.Multiplayer.HunterMeterManager.Instance?.ReportKnockdown(playerMovement);
             return true;
         }
@@ -313,7 +244,7 @@ namespace WalaPaNameHehe
 
             if (syncedIsDowned.Value)
             {
-                syncedIsDowned.Value = false;
+                SetDowned(false);
             }
 
             if (pendingInstakillRoutine != null)
@@ -346,19 +277,33 @@ namespace WalaPaNameHehe
                 }
                 ApplyDeathRagdollClientRpc(impulse, hasAttackerNetworkId, attackerNetworkId);
             }
-
-            TriggerInstakillDeathSound();
             return playerMovement.ServerKill();
         }
 
         private void StartAutoRecoverIfNeeded()
         {
-            if (!IsNetworkActive() || !IsServer)
+            if (!IsAuthoritative())
             {
                 return;
             }
 
-            float duration = Mathf.Max(0f, autoRecoverSeconds);
+            float duration = Mathf.Max(0f, downStateDurationSeconds);
+            if (duration <= 0f)
+            {
+                return;
+            }
+
+            StartAutoRecoverForDuration(duration);
+        }
+
+        private void StartAutoRecoverForDuration(float durationSeconds)
+        {
+            if (!IsAuthoritative())
+            {
+                return;
+            }
+
+            float duration = Mathf.Max(0f, durationSeconds);
             if (duration <= 0f)
             {
                 return;
@@ -385,7 +330,7 @@ namespace WalaPaNameHehe
         {
             yield return new WaitForSeconds(durationSeconds);
 
-            if (!IsNetworkActive() || !IsServer)
+            if (!IsAuthoritative())
             {
                 autoRecoverRoutine = null;
                 yield break;
@@ -393,7 +338,7 @@ namespace WalaPaNameHehe
 
             if (syncedIsDowned.Value)
             {
-                syncedIsDowned.Value = false;
+                SetDowned(false);
             }
 
             autoRecoverRoutine = null;
@@ -414,7 +359,7 @@ namespace WalaPaNameHehe
             biteHoldRoutine = StartCoroutine(BiteHoldRoutine(dinoNetworkId, bitePointPath, holdSeconds, finalResult, true));
         }
 
-        public void ServerBeginGrabHold(ulong dinoNetworkId, string bitePointPath, float holdSeconds, float dropRagdollDurationSeconds = 0f)
+        public void ServerBeginGrabHold(ulong dinoNetworkId, string bitePointPath, float holdSeconds, bool applyDownStateOnRelease = false)
         {
             if (IsNetworkActive() && !IsServer)
             {
@@ -426,7 +371,7 @@ namespace WalaPaNameHehe
                 StopCoroutine(biteHoldRoutine);
             }
 
-            biteHoldRoutine = StartCoroutine(BiteHoldRoutine(dinoNetworkId, bitePointPath, holdSeconds, HitResult.None, false, dropRagdollDurationSeconds));
+            biteHoldRoutine = StartCoroutine(BiteHoldRoutine(dinoNetworkId, bitePointPath, holdSeconds, HitResult.None, false, applyDownStateOnRelease));
         }
 
         public void ServerEndBiteHold()
@@ -445,9 +390,9 @@ namespace WalaPaNameHehe
             EndBiteHoldClientRpc(false);
         }
 
-        private IEnumerator BiteHoldRoutine(ulong dinoNetworkId, string bitePointPath, float holdSeconds, HitResult finalResult, bool useRagdoll, float dropRagdollDurationSeconds = 0f)
+        private IEnumerator BiteHoldRoutine(ulong dinoNetworkId, string bitePointPath, float holdSeconds, HitResult finalResult, bool useRagdoll, bool applyDownStateOnRelease = false)
         {
-            BeginBiteHoldClientRpc(dinoNetworkId, bitePointPath, useRagdoll, dropRagdollDurationSeconds);
+            BeginBiteHoldClientRpc(dinoNetworkId, bitePointPath, useRagdoll, applyDownStateOnRelease);
 
             float duration = Mathf.Max(0.05f, holdSeconds);
             yield return new WaitForSeconds(duration);
@@ -460,7 +405,7 @@ namespace WalaPaNameHehe
                 Debug.Log($"PlayerHitHandler: Instakill resolved for '{name}' after bite hold.");
                 if (syncedIsDowned.Value)
                 {
-                    syncedIsDowned.Value = false;
+                    SetDowned(false);
                 }
 
                 if (playerMovement != null)
@@ -472,53 +417,13 @@ namespace WalaPaNameHehe
         {
             if (!syncedIsDowned.Value)
             {
-                syncedIsDowned.Value = true;
+                SetDowned(true);
             }
         }
-        }
-
-        [ServerRpc(RequireOwnership = false)]
-        private void RequestReviveServerRpc(bool isHolding, ServerRpcParams rpcParams = default)
-        {
-            if (!syncedIsDowned.Value)
-            {
-                return;
-            }
-
-            ulong senderId = rpcParams.Receive.SenderClientId;
-            if (isHolding)
-            {
-                if (activeReviverClientId != senderId)
-                {
-                    activeReviverClientId = senderId;
-                    reviveProgressSeconds = 0f;
-                    lastReviveTickTime = Time.time;
-                }
-
-                float now = Time.time;
-                float delta = Mathf.Max(0f, now - lastReviveTickTime);
-                reviveProgressSeconds += delta;
-                lastReviveTickTime = now;
-
-                if (reviveProgressSeconds >= Mathf.Max(0.1f, reviveHoldSeconds))
-                {
-                    syncedIsDowned.Value = false;
-                    activeReviverClientId = ulong.MaxValue;
-                    reviveProgressSeconds = 0f;
-                }
-
-                return;
-            }
-
-            if (activeReviverClientId == senderId)
-            {
-                activeReviverClientId = ulong.MaxValue;
-                reviveProgressSeconds = 0f;
-            }
         }
 
         [ClientRpc]
-        private void BeginBiteHoldClientRpc(ulong dinoNetworkId, string bitePointPath, bool useRagdoll, float dropRagdollDurationSeconds)
+        private void BeginBiteHoldClientRpc(ulong dinoNetworkId, string bitePointPath, bool useRagdoll, bool applyDownStateOnRelease)
         {
             Transform bitePoint = ResolveBitePoint(dinoNetworkId, bitePointPath);
             lastHoldUsedRagdoll = useRagdoll;
@@ -538,8 +443,8 @@ namespace WalaPaNameHehe
                 grabHoldPoint = bitePoint;
                 isGrabbedHold = grabHoldPoint != null;
                 isGrabHoldActive = true;
-                pendingDropRagdollOnRelease = dropRagdollDurationSeconds > 0.01f;
-                pendingDropRagdollDuration = Mathf.Max(0.05f, dropRagdollDurationSeconds);
+                pendingDownStateOnRelease = applyDownStateOnRelease;
+                pendingDownStateIgnoreRoot = applyDownStateOnRelease && bitePoint != null ? bitePoint.root : null;
                 if (playerMovement != null)
                 {
                     playerMovement.SetGrabbed(isGrabbedHold);
@@ -552,18 +457,13 @@ namespace WalaPaNameHehe
         [ClientRpc]
         private void EndBiteHoldClientRpc(bool wasInstakill)
         {
-            if (wasInstakill)
-            {
-                PlayInstakillDeathSoundLocal();
-            }
-
             if (isGrabHoldActive)
             {
                 ClearGrabHoldState();
-                if (pendingDropRagdollOnRelease)
+                if (pendingDownStateOnRelease)
                 {
-                    ApplyDropRagdollNow(pendingDropRagdollDuration);
-                    pendingDropRagdollOnRelease = false;
+                    pendingDownStateOnRelease = false;
+                    pendingDownStateOnImpact = true;
                 }
                 return;
             }
@@ -580,45 +480,48 @@ namespace WalaPaNameHehe
             }
         }
 
-        private void TriggerInstakillDeathSound()
+        private void ApplyTemporaryDownStateNow(float durationSeconds)
         {
+            float duration = Mathf.Max(0f, durationSeconds);
+            if (duration <= 0f)
+            {
+                return;
+            }
+
             if (IsNetworkActive())
             {
-                if (!IsServer)
+                if (!IsOwner)
                 {
                     return;
                 }
 
-                PlayInstakillDeathSoundClientRpc();
+                RequestTemporaryDownStateServerRpc(duration);
                 return;
             }
 
-            PlayInstakillDeathSoundLocal();
+            if (!syncedIsDowned.Value)
+            {
+                SetDowned(true);
+            }
+
+            StartAutoRecoverForDuration(duration);
         }
 
-        [ClientRpc]
-        private void PlayInstakillDeathSoundClientRpc()
+        [ServerRpc(RequireOwnership = true)]
+        private void RequestTemporaryDownStateServerRpc(float durationSeconds, ServerRpcParams rpcParams = default)
         {
-            PlayInstakillDeathSoundLocal();
-        }
-
-        private void PlayInstakillDeathSoundLocal()
-        {
-            if (instakillDeathAudioSource == null || instakillDeathClips == null || instakillDeathClips.Length == 0)
+            float duration = Mathf.Max(0f, durationSeconds);
+            if (duration <= 0f)
             {
                 return;
             }
 
-            AudioClip clip = instakillDeathClips[Random.Range(0, instakillDeathClips.Length)];
-            if (clip == null)
+            if (!syncedIsDowned.Value)
             {
-                return;
+                SetDowned(true);
             }
 
-            float pitchMin = Mathf.Min(instakillDeathPitchRange.x, instakillDeathPitchRange.y);
-            float pitchMax = Mathf.Max(instakillDeathPitchRange.x, instakillDeathPitchRange.y);
-            instakillDeathAudioSource.pitch = Random.Range(pitchMin, pitchMax);
-            instakillDeathAudioSource.PlayOneShot(clip, Mathf.Clamp01(instakillDeathVolume));
+            StartAutoRecoverForDuration(duration);
         }
 
         private void ClearGrabHoldState()
@@ -671,75 +574,6 @@ namespace WalaPaNameHehe
             {
                 weaponDrone.ForceRecallDueToGrab();
             }
-        }
-
-        private void ApplyDropRagdollNow(float durationSeconds)
-        {
-            if (ragdollController == null || playerMovement == null)
-            {
-                return;
-            }
-
-            if (syncedIsDowned.Value || playerMovement.IsDead)
-            {
-                return;
-            }
-
-            if (dropRagdollRoutine != null)
-            {
-                StopCoroutine(dropRagdollRoutine);
-            }
-
-            isRagdollHoldActive = true;
-            UpdateIncapacitationLocal();
-            dropRagdollRoutine = StartCoroutine(DropRagdollRoutine(durationSeconds));
-        }
-
-        private IEnumerator DropRagdollRoutine(float durationSeconds)
-        {
-            if (playerMovement != null)
-            {
-                playerMovement.SetRagdollPovActive(true);
-            }
-
-            ragdollController.SetDownedRagdoll(true);
-            ragdollController.AlignAndSnapToGround();
-            SnapRootToRagdollOnly();
-            yield return new WaitForSeconds(durationSeconds);
-            yield return null;
-            yield return null;
-            if (IsNetworkActive())
-            {
-                if (IsServer)
-                {
-                    ApplyServerSnapToRagdoll();
-                }
-            }
-            else
-            {
-                SnapRootToRagdollOnly();
-            }
-            ragdollController.SetDownedRagdoll(false);
-
-            float getUpStart = Time.unscaledTime;
-            const float maxGetUpWaitSeconds = 6f;
-            while (ragdollController != null &&
-                   (ragdollController.IsInGetUpState() || ragdollController.IsGetUpTransitionActive()) &&
-                   Time.unscaledTime - getUpStart < maxGetUpWaitSeconds)
-            {
-                yield return null;
-            }
-            // Let PlayerRagdollController run a LateUpdate tick to restore camera pivot after getup exits.
-            yield return null;
-
-            if (playerMovement != null)
-            {
-                playerMovement.SetRagdollPovActive(false);
-            }
-
-            isRagdollHoldActive = false;
-            UpdateIncapacitationLocal();
-            dropRagdollRoutine = null;
         }
 
         private void SnapRootToRagdollOnly()

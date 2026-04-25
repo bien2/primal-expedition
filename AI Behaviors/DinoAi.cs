@@ -97,14 +97,18 @@ public class DinoAI : NetworkBehaviour
     public bool isIdle;
 
     [Header("Attack")]
-    public bool enableAttackKill = true;
-    public float attackKillRadius = 1.2f;
-    public float attackCheckInterval = 0.1f;
+    [HideInInspector] public bool enableAttackKill = true;
+    [HideInInspector] public float attackKillRadius = 1.2f;
+    [HideInInspector] public float attackCheckInterval = 0.1f;
 
     [Header("Hunter Jump Attack")]
-    [Min(0f)] public float jumpAttackRadius = 1.5f;
-    [Min(0.05f)] public float jumpAttackDurationSeconds = 0.60f;
-    [Min(0f)] public float jumpAttackHeight = 4.0f;
+    [HideInInspector] [Min(0f)] public float jumpAttackRadius = 1.5f;
+    [HideInInspector] [Min(0.05f)] public float jumpAttackDurationSeconds = 0.60f;
+    [HideInInspector] [Min(0f)] public float jumpAttackHeight = 4.0f;
+    [HideInInspector] public bool enableJumpAttack = true;
+
+    [Header("Roamer Plunge Attack")]
+    [Range(0f, 1f)] public float roamerPlungeChance = 0.15f;
 
     [Header("Animation")]
     [SerializeField] private bool driveAnimator = true;
@@ -175,6 +179,8 @@ public class DinoAI : NetworkBehaviour
     private bool cachedAgentUpdatePosition;
     private bool pendingJumpAfterRoar;
     private Transform pendingJumpTarget;
+    private bool roamerPlungePendingAfterRoar;
+    private Transform roamerPlungeTarget;
     private float reactionCooldownUntilTime;
     private DinoAudio dinoAudio;
     private const int OverlapBufferSize = 32;
@@ -1005,6 +1011,19 @@ public class DinoAI : NetworkBehaviour
         chaseLostSightTimer = 0f;
         pendingJumpAfterRoar = false;
         pendingJumpTarget = null;
+        if (alertRoarNextState == DinoState.Flee && roamerPlungePendingAfterRoar)
+        {
+            roamerPlungePendingAfterRoar = false;
+            Transform plungeTarget = roamerPlungeTarget;
+            roamerPlungeTarget = null;
+            if (TryStartJumpAttack(plungeTarget))
+            {
+                return;
+            }
+        }
+
+        roamerPlungePendingAfterRoar = false;
+        roamerPlungeTarget = null;
         ChangeState(alertRoarNextState);
     }
 
@@ -1046,7 +1065,20 @@ public class DinoAI : NetworkBehaviour
             return false;
         }
 
-        if (jumpAttackRadius <= 0f)
+        bool jumpEnabled = enableJumpAttack;
+        float radius = jumpAttackRadius;
+        if (attackController != null)
+        {
+            jumpEnabled = attackController.EnableJumpAttack;
+            radius = attackController.JumpAttackRadius;
+        }
+
+        if (!jumpEnabled)
+        {
+            return false;
+        }
+
+        if (radius <= 0f)
         {
             return false;
         }
@@ -1058,7 +1090,7 @@ public class DinoAI : NetworkBehaviour
 
         Vector3 toTarget = target.position - transform.position;
         toTarget.y = 0f;
-        float radius = Mathf.Max(0f, jumpAttackRadius);
+        radius = Mathf.Max(0f, radius);
         if (toTarget.sqrMagnitude > radius * radius)
         {
             return false;
@@ -1139,7 +1171,18 @@ public class DinoAI : NetworkBehaviour
 
     private void TryKillPlayersInRadius()
     {
-        if (!enableAttackKill)
+        bool attackEnabled = enableAttackKill;
+        float radius = attackKillRadius;
+        float interval = attackCheckInterval;
+
+        if (attackController != null)
+        {
+            attackEnabled = attackController.EnableAttack;
+            radius = attackController.AttackRadius;
+            interval = attackController.AttackCheckInterval;
+        }
+
+        if (!attackEnabled)
         {
             return;
         }
@@ -1149,7 +1192,7 @@ public class DinoAI : NetworkBehaviour
             return;
         }
 
-        if (attackKillRadius <= 0f)
+        if (radius <= 0f)
         {
             return;
         }
@@ -1159,7 +1202,7 @@ public class DinoAI : NetworkBehaviour
             return;
         }
 
-        nextAttackCheckTime = Time.time + Mathf.Max(0.02f, attackCheckInterval);
+        nextAttackCheckTime = Time.time + Mathf.Max(0.02f, interval);
 
         if (!TryGetPlayerMask(out int mask))
         {
@@ -1170,7 +1213,7 @@ public class DinoAI : NetworkBehaviour
         Collider[] hitsBuffer = EnsureOverlapBuffer();
         int hitCount = Physics.OverlapSphereNonAlloc(
             selfPosition,
-            attackKillRadius,
+            radius,
             hitsBuffer,
             mask,
             QueryTriggerInteraction.Ignore);
@@ -1179,7 +1222,7 @@ public class DinoAI : NetworkBehaviour
         {
             Collider[] hits = Physics.OverlapSphere(
                 selfPosition,
-                attackKillRadius,
+                radius,
                 mask,
                 QueryTriggerInteraction.Ignore);
             KillPlayersFromHits(hits, hits.Length);
@@ -1245,7 +1288,7 @@ public class DinoAI : NetworkBehaviour
 
     public bool TryStartJumpAttack(Transform target)
     {
-        if (aggressionType != AggressionType.Hunter)
+        if (aggressionType != AggressionType.Hunter && aggressionType != AggressionType.Roamer)
         {
             return false;
         }
@@ -1255,7 +1298,25 @@ public class DinoAI : NetworkBehaviour
             return false;
         }
 
-        if (jumpAttackRadius <= 0f)
+        bool jumpEnabled = enableJumpAttack;
+        float radius = jumpAttackRadius;
+        float duration = jumpAttackDurationSeconds;
+        float height = jumpAttackHeight;
+
+        if (attackController != null)
+        {
+            jumpEnabled = attackController.EnableJumpAttack;
+            radius = attackController.JumpAttackRadius;
+            duration = attackController.JumpAttackDurationSeconds;
+            height = attackController.JumpAttackHeight;
+        }
+
+        if (!jumpEnabled)
+        {
+            return false;
+        }
+
+        if (radius <= 0f)
         {
             return false;
         }
@@ -1277,7 +1338,7 @@ public class DinoAI : NetworkBehaviour
 
         Vector3 toTarget = target.position - transform.position;
         toTarget.y = 0f;
-        float radius = Mathf.Max(0f, jumpAttackRadius);
+        radius = Mathf.Max(0f, radius);
         if (toTarget.sqrMagnitude > radius * radius)
         {
             return false;
@@ -1300,14 +1361,14 @@ public class DinoAI : NetworkBehaviour
         isJumpAttacking = true;
         jumpAttackUsedThisChase = true;
         nextJumpAttackAllowedTime = Time.time + 1.25f;
-        StartCoroutine(JumpAttackRoutine(target));
+        StartCoroutine(JumpAttackRoutine(target, duration, height));
         return true;
     }
 
-    private IEnumerator JumpAttackRoutine(Transform target)
+    private IEnumerator JumpAttackRoutine(Transform target, float durationSeconds, float jumpHeight)
     {
-        float duration = Mathf.Max(0.05f, jumpAttackDurationSeconds);
-        float height = Mathf.Max(0f, jumpAttackHeight);
+        float duration = Mathf.Max(0.05f, durationSeconds);
+        float height = Mathf.Max(0f, jumpHeight);
         Vector3 start = transform.position;
 
         float startTime = Time.time;
@@ -1357,6 +1418,11 @@ public class DinoAI : NetworkBehaviour
         }
 
         isJumpAttacking = false;
+
+        if (aggressionType == AggressionType.Roamer)
+        {
+            StartFleeToDespawnPoint(false);
+        }
     }
 
     public bool IsTargetVisibleForChase(Transform target)
@@ -1636,6 +1702,17 @@ public class DinoAI : NetworkBehaviour
         }
 
         ChangeState(DinoState.Flee);
+    }
+
+    public void SetRoamerPendingPlunge(Transform target)
+    {
+        if (aggressionType != AggressionType.Roamer)
+        {
+            return;
+        }
+
+        roamerPlungePendingAfterRoar = target != null;
+        roamerPlungeTarget = target;
     }
 
     private void HandleFlee()
@@ -2922,7 +2999,7 @@ public class DinoAI : NetworkBehaviour
         bool showPerceptionCore = aggressionType != AggressionType.Passive && aggressionType != AggressionType.Plunderer && aggressionType != AggressionType.Hunter;
         bool usesSoundRadius = canHearSounds && (aggressionType == AggressionType.Apex || aggressionType == AggressionType.Roamer);
         bool usesLocalRoamRadius = aggressionType != AggressionType.Apex && aggressionType != AggressionType.Hunter && aggressionType != AggressionType.Plunderer;
-        bool showAttackSettings = aggressionType == AggressionType.Neutral || aggressionType == AggressionType.Apex || aggressionType == AggressionType.Hunter || aggressionType == AggressionType.Plunderer;
+        bool showAttackSettings = aggressionType == AggressionType.Neutral || aggressionType == AggressionType.Apex || aggressionType == AggressionType.Hunter || aggressionType == AggressionType.Plunderer || aggressionType == AggressionType.Roamer;
         if (!showPerceptionCore && !usesSoundRadius && !usesLocalRoamRadius && !showAttackSettings && aggressionType != AggressionType.Hunter)
         {
             DrawGroundingGizmo();
@@ -2953,16 +3030,30 @@ public class DinoAI : NetworkBehaviour
             DrawViewConeGizmo(new Color(0.2f, 0.8f, 1f, 0.9f), detectionRadius);
         }
 
-        if (showAttackSettings && enableAttackKill && attackKillRadius > 0f)
+        bool attackEnabled = enableAttackKill;
+        float attackRadius = attackKillRadius;
+        if (attackController != null)
         {
-            Gizmos.color = new Color(1f, 0.35f, 0.35f, 0.7f);
-            Gizmos.DrawWireSphere(transform.position, attackKillRadius);
+            attackEnabled = attackController.EnableAttack;
+            attackRadius = attackController.AttackRadius;
         }
 
-        if (aggressionType == AggressionType.Hunter && jumpAttackRadius > 0f)
+        if (showAttackSettings && attackEnabled && attackRadius > 0f)
+        {
+            Gizmos.color = new Color(1f, 0.35f, 0.35f, 0.7f);
+            Gizmos.DrawWireSphere(transform.position, attackRadius);
+        }
+
+        float jumpRadius = jumpAttackRadius;
+        if (attackController != null)
+        {
+            jumpRadius = attackController.JumpAttackRadius;
+        }
+
+        if (aggressionType == AggressionType.Hunter && jumpRadius > 0f)
         {
             Gizmos.color = new Color(0.7f, 0.2f, 1f, 0.7f);
-            Gizmos.DrawWireSphere(transform.position, jumpAttackRadius);
+            Gizmos.DrawWireSphere(transform.position, jumpRadius);
         }
 
         if (showPerceptionCore && showLineOfSightGizmo && requireLineOfSight && hasLosSample)

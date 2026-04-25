@@ -27,6 +27,7 @@ public class DinoAIEditor : Editor
     private SerializedProperty loseSightChaseTimeoutProp;
     private SerializedProperty reactionCooldownSecondsProp;
     private SerializedProperty roamerFleeSecondsProp;
+    private SerializedProperty roamerPlungeChanceProp;
     private SerializedProperty hunterCueDelayMinProp;
     private SerializedProperty hunterCueDelayMaxProp;
     private SerializedProperty hunterCueCountMinProp;
@@ -43,12 +44,6 @@ public class DinoAIEditor : Editor
     private SerializedProperty plundererDropArriveDistanceProp;
     private SerializedProperty idleTimeProp;
     private SerializedProperty isIdleProp;
-    private SerializedProperty enableAttackKillProp;
-    private SerializedProperty attackKillRadiusProp;
-    private SerializedProperty attackCheckIntervalProp;
-    private SerializedProperty jumpAttackRadiusProp;
-    private SerializedProperty jumpAttackDurationSecondsProp;
-    private SerializedProperty jumpAttackHeightProp;
     private SerializedProperty snapToGroundProp;
     private SerializedProperty groundLayersProp;
     private SerializedProperty groundRayStartHeightProp;
@@ -83,6 +78,7 @@ public class DinoAIEditor : Editor
         loseSightChaseTimeoutProp = serializedObject.FindProperty("loseSightChaseTimeout");
         reactionCooldownSecondsProp = serializedObject.FindProperty("reactionCooldownSeconds");
         roamerFleeSecondsProp = serializedObject.FindProperty("roamerFleeSeconds");
+        roamerPlungeChanceProp = serializedObject.FindProperty("roamerPlungeChance");
         hunterCueDelayMinProp = serializedObject.FindProperty("hunterCueDelayMin");
         hunterCueDelayMaxProp = serializedObject.FindProperty("hunterCueDelayMax");
         hunterCueCountMinProp = serializedObject.FindProperty("hunterCueCountMin");
@@ -99,12 +95,6 @@ public class DinoAIEditor : Editor
         plundererDropArriveDistanceProp = serializedObject.FindProperty("plundererDropArriveDistance");
         idleTimeProp = serializedObject.FindProperty("idleTime");
         isIdleProp = serializedObject.FindProperty("isIdle");
-        enableAttackKillProp = serializedObject.FindProperty("enableAttackKill");
-        attackKillRadiusProp = serializedObject.FindProperty("attackKillRadius");
-        attackCheckIntervalProp = serializedObject.FindProperty("attackCheckInterval");
-        jumpAttackRadiusProp = serializedObject.FindProperty("jumpAttackRadius");
-        jumpAttackDurationSecondsProp = serializedObject.FindProperty("jumpAttackDurationSeconds");
-        jumpAttackHeightProp = serializedObject.FindProperty("jumpAttackHeight");
         snapToGroundProp = serializedObject.FindProperty("snapToGround");
         groundLayersProp = serializedObject.FindProperty("groundLayers");
         groundRayStartHeightProp = serializedObject.FindProperty("groundRayStartHeight");
@@ -129,7 +119,6 @@ public class DinoAIEditor : Editor
         bool isPlunderer = selectedAggression == DinoAI.AggressionType.Plunderer;
         bool isPassive = selectedAggression == DinoAI.AggressionType.Passive;
         bool isRoamer = selectedAggression == DinoAI.AggressionType.Roamer;
-        bool showAttackSettings = isNeutral || isApex || isHunter || isPlunderer;
         bool showReactionCooldown = (isNeutral || isApex) && !isPlunderer;
         bool showPerceptionCore = !isPassive && !isPlunderer && !isHunter;
         bool showSoundPerception = !isPassive && !isNeutral && !isPlunderer && !isHunter;
@@ -138,78 +127,82 @@ public class DinoAIEditor : Editor
         {
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("Perception", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(detectionRadiusProp);
+            detectionRadiusProp.floatValue = EditorGUILayout.FloatField("Detection Radius", detectionRadiusProp.floatValue);
 
             if (!isPlunderer)
             {
                 if (isNeutral)
                 {
-                    EditorGUILayout.PropertyField(neutralReactDelayMinProp, new GUIContent("Neutral React Delay Min"));
-                    EditorGUILayout.PropertyField(neutralReactDelayMaxProp, new GUIContent("Neutral React Delay Max"));
+                    neutralReactDelayMinProp.floatValue = EditorGUILayout.FloatField("Neutral React Delay Min", neutralReactDelayMinProp.floatValue);
+                    neutralReactDelayMaxProp.floatValue = EditorGUILayout.FloatField("Neutral React Delay Max", neutralReactDelayMaxProp.floatValue);
                 }
 
                 if (showSoundPerception)
                 {
-                    EditorGUILayout.PropertyField(canHearSoundsProp, new GUIContent("React To Sounds"));
+                    canHearSoundsProp.boolValue = EditorGUILayout.Toggle("React To Sounds", canHearSoundsProp.boolValue);
                     if (canHearSoundsProp.boolValue)
                     {
-                        EditorGUILayout.PropertyField(soundReactionRadiusProp);
+                        soundReactionRadiusProp.floatValue = EditorGUILayout.FloatField("Sound Reaction Radius", soundReactionRadiusProp.floatValue);
                     }
                 }
             }
 
-            EditorGUILayout.PropertyField(viewAngleProp);
-            EditorGUILayout.PropertyField(requireLineOfSightProp);
+            viewAngleProp.floatValue = EditorGUILayout.FloatField("View Angle", viewAngleProp.floatValue);
+            requireLineOfSightProp.boolValue = EditorGUILayout.Toggle("Require Line Of Sight", requireLineOfSightProp.boolValue);
             if (requireLineOfSightProp.boolValue)
             {
-                EditorGUILayout.PropertyField(eyeHeightProp);
-                EditorGUILayout.PropertyField(lineOfSightBlockersProp);
-                EditorGUILayout.PropertyField(showLineOfSightGizmoProp);
+                eyeHeightProp.floatValue = EditorGUILayout.FloatField("Eye Height", eyeHeightProp.floatValue);
+                EditorGUILayout.PropertyField(lineOfSightBlockersProp, new GUIContent("Line Of Sight Blockers"));
+                showLineOfSightGizmoProp.boolValue = EditorGUILayout.Toggle("Show Line Of Sight Gizmo", showLineOfSightGizmoProp.boolValue);
             }
-            EditorGUILayout.PropertyField(playerLayersProp);
+            EditorGUILayout.PropertyField(playerLayersProp, new GUIContent("Player Layers"));
         }
 
         EditorGUILayout.Space(4f);
         EditorGUILayout.LabelField("Movement", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(walkSpeedProp);
-        EditorGUILayout.PropertyField(runSpeedProp);
+        walkSpeedProp.floatValue = EditorGUILayout.FloatField("Walk Speed", walkSpeedProp.floatValue);
+        runSpeedProp.floatValue = EditorGUILayout.FloatField("Run Speed", runSpeedProp.floatValue);
         if (!isApex && !isHunter && !isPlunderer)
         {
-            EditorGUILayout.PropertyField(roamRadiusProp);
+            roamRadiusProp.floatValue = EditorGUILayout.FloatField("Roam Radius", roamRadiusProp.floatValue);
         }
-        EditorGUILayout.PropertyField(modelYawOffsetProp, new GUIContent("Model Yaw Offset"));
+        modelYawOffsetProp.floatValue = EditorGUILayout.FloatField("Model Yaw Offset", modelYawOffsetProp.floatValue);
 
         EditorGUILayout.Space(4f);
         EditorGUILayout.LabelField("Pathing", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(roamDestinationAttemptsProp, new GUIContent("Roam Attempts"));
-        EditorGUILayout.PropertyField(requireCompleteRoamPathProp, new GUIContent("Require Complete Path"));
+        roamDestinationAttemptsProp.intValue = EditorGUILayout.IntField("Roam Attempts", roamDestinationAttemptsProp.intValue);
+        requireCompleteRoamPathProp.boolValue = EditorGUILayout.Toggle("Require Complete Path", requireCompleteRoamPathProp.boolValue);
 
         EditorGUILayout.Space(4f);
         EditorGUILayout.LabelField("Behavior", EditorStyles.boldLabel);
         if (isNeutral || isApex)
         {
-            EditorGUILayout.PropertyField(chaseDurationProp);
+            chaseDurationProp.floatValue = EditorGUILayout.FloatField("Chase Duration", chaseDurationProp.floatValue);
         }
         if (isNeutral || isApex)
         {
-            EditorGUILayout.PropertyField(loseSightChaseTimeoutProp);
+            loseSightChaseTimeoutProp.floatValue = EditorGUILayout.FloatField("Lose Sight Chase Timeout", loseSightChaseTimeoutProp.floatValue);
         }
         if (showReactionCooldown)
         {
-            EditorGUILayout.PropertyField(reactionCooldownSecondsProp, new GUIContent("Reaction Cooldown Seconds"));
+            reactionCooldownSecondsProp.floatValue = EditorGUILayout.FloatField("Reaction Cooldown Seconds", reactionCooldownSecondsProp.floatValue);
         }
         if (isRoamer)
         {
-            EditorGUILayout.PropertyField(roamerFleeSecondsProp, new GUIContent("Roamer Flee Seconds"));
+            roamerFleeSecondsProp.floatValue = EditorGUILayout.FloatField("Roamer Flee Seconds", roamerFleeSecondsProp.floatValue);
+            if (roamerPlungeChanceProp != null)
+            {
+                EditorGUILayout.Slider(roamerPlungeChanceProp, 0f, 1f, new GUIContent("Roamer Plunge Chance"));
+            }
         }
         if (isHunter)
         {
             EditorGUILayout.Space(4f);
             EditorGUILayout.LabelField("Hunter Cues", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(hunterCueDelayMinProp, new GUIContent("HunterCueDelayMin"));
-            EditorGUILayout.PropertyField(hunterCueDelayMaxProp, new GUIContent("HunterCueDelayMax"));
-            EditorGUILayout.PropertyField(hunterCueCountMinProp, new GUIContent("HunterCueCountMin"));
-            EditorGUILayout.PropertyField(hunterCueCountMaxProp, new GUIContent("HunterCueCountMax"));
+            hunterCueDelayMinProp.floatValue = EditorGUILayout.FloatField("HunterCueDelayMin", hunterCueDelayMinProp.floatValue);
+            hunterCueDelayMaxProp.floatValue = EditorGUILayout.FloatField("HunterCueDelayMax", hunterCueDelayMaxProp.floatValue);
+            hunterCueCountMinProp.intValue = EditorGUILayout.IntField("HunterCueCountMin", hunterCueCountMinProp.intValue);
+            hunterCueCountMaxProp.intValue = EditorGUILayout.IntField("HunterCueCountMax", hunterCueCountMaxProp.intValue);
         }
         if (isPlunderer)
         {
@@ -231,36 +224,18 @@ public class DinoAIEditor : Editor
             EditorGUILayout.PropertyField(idleTimeProp);
         }
 
-        if (showAttackSettings)
-        {
-            EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("Attack", EditorStyles.boldLabel);
-            if (isHunter)
-            {
-                EditorGUILayout.PropertyField(jumpAttackRadiusProp, new GUIContent("Jump Attack Radius"));
-                EditorGUILayout.PropertyField(jumpAttackDurationSecondsProp, new GUIContent("Jump Attack Duration Seconds"));
-                EditorGUILayout.PropertyField(jumpAttackHeightProp, new GUIContent("Jump Attack Height"));
-            }
-            EditorGUILayout.PropertyField(enableAttackKillProp, new GUIContent("Enable Attack Kill"));
-            if (enableAttackKillProp.boolValue)
-            {
-                EditorGUILayout.PropertyField(attackKillRadiusProp, new GUIContent("Attack Kill Radius"));
-                EditorGUILayout.PropertyField(attackCheckIntervalProp, new GUIContent("Attack Check Interval"));
-            }
-        }
-
         EditorGUILayout.Space(4f);
         EditorGUILayout.LabelField("Grounding", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(snapToGroundProp, new GUIContent("Snap To Ground"));
+        snapToGroundProp.boolValue = EditorGUILayout.Toggle("Snap To Ground", snapToGroundProp.boolValue);
         if (snapToGroundProp.boolValue)
         {
             EditorGUILayout.PropertyField(groundLayersProp, new GUIContent("Ground Layers"));
-            EditorGUILayout.PropertyField(groundRayStartHeightProp, new GUIContent("Ray Start Height"));
-            EditorGUILayout.PropertyField(groundRayLengthProp, new GUIContent("Ray Length"));
-            EditorGUILayout.PropertyField(groundOffsetProp, new GUIContent("Ground Offset"));
-            EditorGUILayout.PropertyField(groundSnapSpeedProp, new GUIContent("Snap Speed"));
-            EditorGUILayout.PropertyField(showGroundingGizmoProp, new GUIContent("Show Gizmo"));
-            EditorGUILayout.PropertyField(groundingGizmoColorProp, new GUIContent("Gizmo Color"));
+            groundRayStartHeightProp.floatValue = EditorGUILayout.FloatField("Ray Start Height", groundRayStartHeightProp.floatValue);
+            groundRayLengthProp.floatValue = EditorGUILayout.FloatField("Ray Length", groundRayLengthProp.floatValue);
+            groundOffsetProp.floatValue = EditorGUILayout.FloatField("Ground Offset", groundOffsetProp.floatValue);
+            groundSnapSpeedProp.floatValue = EditorGUILayout.FloatField("Snap Speed", groundSnapSpeedProp.floatValue);
+            showGroundingGizmoProp.boolValue = EditorGUILayout.Toggle("Show Gizmo", showGroundingGizmoProp.boolValue);
+            groundingGizmoColorProp.colorValue = EditorGUILayout.ColorField("Gizmo Color", groundingGizmoColorProp.colorValue);
         }
 
         if (!isPlunderer && !isPassive && !isNeutral)

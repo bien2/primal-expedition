@@ -58,28 +58,91 @@ namespace WalaPaNameHehe.Multiplayer
             [Min(0)] public int spawnCountMax = 0;
         }
 
+        [System.Serializable]
+        public class RoamerSpawnSettings
+        {
+            [SerializeField] private GameObject[] prefabs;
+            [SerializeField] private SpawnPointEntry[] spawnPoints;
+            [SerializeField] private RoamerTier[] tiers = new RoamerTier[0];
+
+            public GameObject[] Prefabs => prefabs;
+            public SpawnPointEntry[] SpawnPoints => spawnPoints;
+            public RoamerTier[] Tiers => tiers;
+        }
+
         [Header("Roamer")]
-        [SerializeField] private GameObject[] roamerPrefabs;
-        [SerializeField] private SpawnPointEntry[] roamerSpawnPoints;
-        [SerializeField] private RoamerTier[] roamer = new RoamerTier[0];
+        [SerializeField] private RoamerSpawnSettings roamer = new RoamerSpawnSettings();
+
+        [System.Serializable]
+        public class HunterSpawnSettings
+        {
+            public DangerMeterManager.ThreatLevel spawnAt = DangerMeterManager.ThreatLevel.Low;
+            public GameObject prefab;
+            public SpawnPointEntry[] spawnPoints;
+        }
 
         [Header("Hunter")]
-        [SerializeField] private ThreatSpawnSettings hunter = new ThreatSpawnSettings();
+        [SerializeField] private HunterSpawnSettings hunter = new HunterSpawnSettings();
         [SerializeField] private bool hunterForceHuntTest;
         [SerializeField] private bool hunterForceHuntPlayCues = true;
 
+        [System.Serializable]
+        public class ApexTier
+        {
+            [Header("Spawn")]
+            public DangerMeterManager.ThreatLevel spawnAt = DangerMeterManager.ThreatLevel.Low;
+            [Min(0)] public int spawnCountMin = 0;
+            [Min(0)] public int spawnCountMax = 0;
+        }
+
+        [System.Serializable]
+        public class ApexSpawnSettings
+        {
+            [SerializeField] private GameObject[] prefabs;
+            [SerializeField] private SpawnPointEntry[] spawnPoints;
+            [SerializeField] private ApexTier[] tiers = new ApexTier[0];
+
+            public GameObject[] Prefabs => prefabs;
+            public SpawnPointEntry[] SpawnPoints => spawnPoints;
+            public ApexTier[] Tiers => tiers;
+        }
+
         [Header("Apex")]
-        [SerializeField] private ThreatSpawnSettings apex = new ThreatSpawnSettings();
+        [SerializeField] private ApexSpawnSettings apex = new ApexSpawnSettings();
+
+        [System.Serializable]
+        public class PlundererSpawnSettings
+        {
+            [System.Serializable]
+            public class PlundererThreatSpawnSettings
+            {
+                [Header("Spawn")]
+                public DangerMeterManager.ThreatLevel spawnAt = DangerMeterManager.ThreatLevel.Low;
+                public GameObject[] prefabs;
+                public SpawnPointEntry[] spawnPoints;
+            }
+
+            [SerializeField] private PlundererThreatSpawnSettings spawn = new PlundererThreatSpawnSettings();
+            [SerializeField] private Transform spawnPoint;
+            [SerializeField] private Transform[] waypoints;
+            [SerializeField] private bool preloadHidden = true;
+            [SerializeField] private float spawnIntervalMin = 60f;
+            [SerializeField] private float spawnIntervalMax = 90f;
+            [SerializeField] private int waypointLoopsMin = 0;
+            [SerializeField] private int waypointLoopsMax = 0;
+
+            public PlundererThreatSpawnSettings Spawn => spawn;
+            public Transform SpawnPoint => spawnPoint;
+            public Transform[] Waypoints => waypoints;
+            public bool PreloadHidden => preloadHidden;
+            public float SpawnIntervalMin => spawnIntervalMin;
+            public float SpawnIntervalMax => spawnIntervalMax;
+            public int WaypointLoopsMin => waypointLoopsMin;
+            public int WaypointLoopsMax => waypointLoopsMax;
+        }
 
         [Header("Plunderer")]
-        [SerializeField] private ThreatSpawnSettings plunderer = new ThreatSpawnSettings();
-        [SerializeField] private Transform plundererSpawnPoint;
-        [SerializeField] private Transform[] plundererWaypoints;
-        [SerializeField] private bool plundererPreloadHidden = true;
-        [SerializeField] private float plundererSpawnIntervalMin = 60f;
-        [SerializeField] private float plundererSpawnIntervalMax = 90f;
-        [SerializeField] private int plundererWaypointLoopsMin = 0;
-        [SerializeField] private int plundererWaypointLoopsMax = 0;
+        [SerializeField] private PlundererSpawnSettings plunderer = new PlundererSpawnSettings();
 
         [Header("Dino Despawn Point")]
         [SerializeField] private Transform dinoDespawnPoint;
@@ -91,6 +154,10 @@ namespace WalaPaNameHehe.Multiplayer
         private Quaternion hunterSpawnRotation;
         private bool hasHunterSpawnLocation;
         private bool hunterSpawnedThisDay;
+        private bool plundererDespawnSubscribed;
+        private Coroutine plundererLoop;
+        private GameObject spawnedPlunderer;
+        private float nextPlundererSpawnTime = float.PositiveInfinity;
 
         private void Awake()
         {
@@ -105,6 +172,8 @@ namespace WalaPaNameHehe.Multiplayer
             AttachToDangerMeter();
             AttachToHunterMeter();
             StartCoroutine(AttachHunterMeterNextFrame());
+            AttachToPlundererDespawn();
+            StartPlundererLoopIfEligible();
         }
 
         private void OnDisable()
@@ -119,6 +188,8 @@ namespace WalaPaNameHehe.Multiplayer
         {
             DetachFromDangerMeter();
             DetachFromHunterMeter();
+            DetachFromPlundererDespawn();
+            StopPlundererLoop();
         }
 
         private System.Collections.IEnumerator AttachHunterMeterNextFrame()
@@ -173,22 +244,23 @@ namespace WalaPaNameHehe.Multiplayer
 
             SpawnForThreat(passiveNeutral, level, "passive/neutral");
             SpawnRoamerForThreat(level);
-            SpawnForThreat(apex, level, "apex");
-            SpawnForThreat(plunderer, level, "plunderer", configurePlunderer: true);
+            SpawnApexForThreat(level);
+            SpawnPlundererForThreat(level);
 
             TrySpawnHunterIfEligible();
         }
 
         private void SpawnRoamerForThreat(DangerMeterManager.ThreatLevel level)
         {
-            if (roamer == null || roamer.Length == 0)
+            RoamerTier[] tiers = roamer != null ? roamer.Tiers : null;
+            if (tiers == null || tiers.Length == 0)
             {
                 return;
             }
 
-            for (int i = 0; i < roamer.Length; i++)
+            for (int i = 0; i < tiers.Length; i++)
             {
-                SpawnRoamerTierForThreat(roamer[i], level);
+                SpawnRoamerTierForThreat(tiers[i], level);
             }
         }
 
@@ -207,13 +279,15 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            if (roamerPrefabs == null || roamerPrefabs.Length == 0)
+            GameObject[] prefabs = roamer != null ? roamer.Prefabs : null;
+            if (prefabs == null || prefabs.Length == 0)
             {
                 PostSpawnLog("V2 spawn skipped (roamer) - no prefabs");
                 return;
             }
 
-            if (roamerSpawnPoints == null || roamerSpawnPoints.Length == 0)
+            SpawnPointEntry[] spawnPoints = roamer != null ? roamer.SpawnPoints : null;
+            if (spawnPoints == null || spawnPoints.Length == 0)
             {
                 PostSpawnLog("V2 spawn skipped (roamer) - no spawn points");
                 return;
@@ -222,12 +296,12 @@ namespace WalaPaNameHehe.Multiplayer
             int spawned = 0;
             for (int i = 0; i < count; i++)
             {
-                if (!TryPickSpawnPoint(roamerSpawnPoints, out SpawnPointEntry entry))
+                if (!TryPickSpawnPoint(spawnPoints, out SpawnPointEntry entry))
                 {
                     break;
                 }
 
-                GameObject prefab = roamerPrefabs[Random.Range(0, roamerPrefabs.Length)];
+                GameObject prefab = prefabs[Random.Range(0, prefabs.Length)];
                 if (prefab == null)
                 {
                     continue;
@@ -259,6 +333,280 @@ namespace WalaPaNameHehe.Multiplayer
             {
                 PostSpawnLog($"spawned V2 roamer - {spawned}");
             }
+        }
+
+        private void SpawnApexForThreat(DangerMeterManager.ThreatLevel level)
+        {
+            ApexTier[] tiers = apex != null ? apex.Tiers : null;
+            if (tiers == null || tiers.Length == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < tiers.Length; i++)
+            {
+                SpawnApexTierForThreat(tiers[i], level);
+            }
+        }
+
+        private void SpawnApexTierForThreat(ApexTier tier, DangerMeterManager.ThreatLevel level)
+        {
+            if (tier == null || tier.spawnAt != level)
+            {
+                return;
+            }
+
+            int min = Mathf.Max(0, tier.spawnCountMin);
+            int max = Mathf.Max(min, tier.spawnCountMax);
+            int count = max > 0 ? Random.Range(min, max + 1) : 0;
+            if (count <= 0)
+            {
+                return;
+            }
+
+            GameObject[] prefabs = apex != null ? apex.Prefabs : null;
+            if (prefabs == null || prefabs.Length == 0)
+            {
+                PostSpawnLog("V2 spawn skipped (apex) - no prefabs");
+                return;
+            }
+
+            SpawnPointEntry[] spawnPoints = apex != null ? apex.SpawnPoints : null;
+            if (spawnPoints == null || spawnPoints.Length == 0)
+            {
+                PostSpawnLog("V2 spawn skipped (apex) - no spawn points");
+                return;
+            }
+
+            int spawned = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!TryPickSpawnPoint(spawnPoints, out SpawnPointEntry entry))
+                {
+                    break;
+                }
+
+                GameObject prefab = prefabs[Random.Range(0, prefabs.Length)];
+                if (prefab == null)
+                {
+                    continue;
+                }
+
+                Vector3 pos = GetSpawnPosition(entry);
+                Quaternion rot = entry.spawnPoint != null ? entry.spawnPoint.rotation : transform.rotation;
+                GameObject instance = Instantiate(prefab, pos, rot);
+
+                if (IsServerActive())
+                {
+                    NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                    if (netObj == null)
+                    {
+                        Debug.LogWarning($"DinoSpawnerManagerV2: Apex prefab '{prefab.name}' missing NetworkObject. Destroying spawned instance.");
+                        Destroy(instance);
+                        continue;
+                    }
+                    if (!netObj.IsSpawned)
+                    {
+                        netObj.Spawn(true);
+                    }
+                }
+
+                spawned++;
+            }
+
+            if (spawned > 0)
+            {
+                PostSpawnLog($"spawned V2 apex - {spawned}");
+            }
+        }
+
+        private void SpawnPlundererForThreat(DangerMeterManager.ThreatLevel level)
+        {
+            CleanupDestroyed(ref spawnedPlunderer);
+            if (spawnedPlunderer != null)
+            {
+                return;
+            }
+
+            PlundererSpawnSettings.PlundererThreatSpawnSettings spawn = plunderer != null ? plunderer.Spawn : null;
+            if (spawn == null || spawn.spawnAt != level)
+            {
+                return;
+            }
+
+            SpawnPlunderer(spawn);
+        }
+
+        private void SpawnPlunderer(PlundererSpawnSettings.PlundererThreatSpawnSettings spawn)
+        {
+            if (spawn.prefabs == null || spawn.prefabs.Length == 0)
+            {
+                PostSpawnLog("V2 spawn skipped (plunderer) - no prefabs");
+                return;
+            }
+
+            if (spawn.spawnPoints == null || spawn.spawnPoints.Length == 0)
+            {
+                PostSpawnLog("V2 spawn skipped (plunderer) - no spawn points");
+                return;
+            }
+
+            if (!TryPickSpawnPoint(spawn.spawnPoints, out SpawnPointEntry entry))
+            {
+                return;
+            }
+
+            GameObject prefab = spawn.prefabs[Random.Range(0, spawn.prefabs.Length)];
+            if (prefab == null)
+            {
+                return;
+            }
+
+            Vector3 pos = GetSpawnPosition(entry);
+            Quaternion rot = entry.spawnPoint != null ? entry.spawnPoint.rotation : Quaternion.identity;
+            GameObject instance = Instantiate(prefab, pos, rot);
+
+            if (IsServerActive())
+            {
+                NetworkObject netObj = instance.GetComponent<NetworkObject>();
+                if (netObj == null)
+                {
+                    Debug.LogWarning($"DinoSpawnerManagerV2: Plunderer prefab '{prefab.name}' missing NetworkObject. Destroying spawned instance.");
+                    Destroy(instance);
+                    return;
+                }
+                if (!netObj.IsSpawned)
+                {
+                    netObj.Spawn(true);
+                }
+            }
+
+            ConfigurePlunderer(instance);
+            spawnedPlunderer = instance;
+            nextPlundererSpawnTime = float.PositiveInfinity;
+            PostSpawnLog("spawned V2 plunderer - 1");
+        }
+
+        private void StartPlundererLoopIfEligible()
+        {
+            if (!CoopGuard.IsServerOrOffline())
+            {
+                return;
+            }
+
+            if (plundererLoop != null)
+            {
+                return;
+            }
+
+            plundererLoop = StartCoroutine(PlundererSpawnLoop());
+        }
+
+        private void StopPlundererLoop()
+        {
+            if (plundererLoop == null)
+            {
+                return;
+            }
+
+            StopCoroutine(plundererLoop);
+            plundererLoop = null;
+        }
+
+        private System.Collections.IEnumerator PlundererSpawnLoop()
+        {
+            while (true)
+            {
+                TrySpawnPlundererFromLoop();
+                yield return new WaitForSeconds(0.5f);
+            }
+        }
+
+        private void TrySpawnPlundererFromLoop()
+        {
+            if (!CoopGuard.IsServerOrOffline())
+            {
+                return;
+            }
+
+            bool wasAlive = spawnedPlunderer != null;
+            CleanupDestroyed(ref spawnedPlunderer);
+            if (wasAlive && spawnedPlunderer == null)
+            {
+                ScheduleNextPlundererSpawn();
+            }
+            if (spawnedPlunderer != null)
+            {
+                return;
+            }
+
+            PlundererSpawnSettings.PlundererThreatSpawnSettings spawn = plunderer != null ? plunderer.Spawn : null;
+            if (spawn == null)
+            {
+                return;
+            }
+
+            DangerMeterManager dm = DangerMeterManager.Instance;
+            DangerMeterManager.ThreatLevel currentThreat = dm != null ? dm.CurrentThreat : DangerMeterManager.ThreatLevel.Low;
+            if (currentThreat < spawn.spawnAt)
+            {
+                return;
+            }
+
+            if (float.IsPositiveInfinity(nextPlundererSpawnTime))
+            {
+                nextPlundererSpawnTime = Time.time;
+            }
+
+            if (Time.time < nextPlundererSpawnTime)
+            {
+                return;
+            }
+
+            SpawnPlunderer(spawn);
+        }
+
+        private void AttachToPlundererDespawn()
+        {
+            if (plundererDespawnSubscribed)
+            {
+                return;
+            }
+
+            PlundererAggressionBehavior.PlundererDespawned -= HandlePlundererDespawned;
+            PlundererAggressionBehavior.PlundererDespawned += HandlePlundererDespawned;
+            plundererDespawnSubscribed = true;
+        }
+
+        private void DetachFromPlundererDespawn()
+        {
+            if (!plundererDespawnSubscribed)
+            {
+                return;
+            }
+
+            PlundererAggressionBehavior.PlundererDespawned -= HandlePlundererDespawned;
+            plundererDespawnSubscribed = false;
+        }
+
+        private void HandlePlundererDespawned(float nextSpawnTime)
+        {
+            spawnedPlunderer = null;
+            if (nextSpawnTime > Time.time)
+            {
+                nextPlundererSpawnTime = nextSpawnTime;
+                return;
+            }
+
+            ScheduleNextPlundererSpawn();
+        }
+
+        private void ScheduleNextPlundererSpawn()
+        {
+            float min = plunderer != null ? Mathf.Max(0.1f, plunderer.SpawnIntervalMin) : 0.1f;
+            float max = plunderer != null ? Mathf.Max(min, plunderer.SpawnIntervalMax) : min;
+            float delay = Random.Range(min, max);
+            nextPlundererSpawnTime = Time.time + delay;
         }
 
         private void SpawnForThreat(
@@ -480,12 +828,12 @@ namespace WalaPaNameHehe.Multiplayer
 
             DangerMeterManager dm = DangerMeterManager.Instance;
             DangerMeterManager.ThreatLevel currentThreat = dm != null ? dm.CurrentThreat : DangerMeterManager.ThreatLevel.Low;
-            if (currentThreat < hunter.spawnAt)
+            if (hunter == null || currentThreat < hunter.spawnAt)
             {
                 return;
             }
 
-            if (hunter.prefabs == null || hunter.prefabs.Length == 0)
+            if (hunter.prefab == null)
             {
                 PostSpawnLog("V2 spawn skipped (hunter) - no prefabs");
                 return;
@@ -502,11 +850,7 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            GameObject prefab = hunter.prefabs[Random.Range(0, hunter.prefabs.Length)];
-            if (prefab == null)
-            {
-                return;
-            }
+            GameObject prefab = hunter.prefab;
 
             Vector3 position = GetSpawnPosition(entry);
             Quaternion rotation = entry.spawnPoint != null ? entry.spawnPoint.rotation : transform.rotation;
@@ -717,10 +1061,10 @@ namespace WalaPaNameHehe.Multiplayer
         private void OnDrawGizmosSelected()
         {
             DrawSpawnPointGizmos(passiveNeutral != null ? passiveNeutral.spawnPoints : null);
-            DrawSpawnPointGizmos(roamerSpawnPoints);
+            DrawSpawnPointGizmos(roamer != null ? roamer.SpawnPoints : null);
             DrawSpawnPointGizmos(hunter != null ? hunter.spawnPoints : null);
-            DrawSpawnPointGizmos(apex != null ? apex.spawnPoints : null);
-            DrawSpawnPointGizmos(plunderer != null ? plunderer.spawnPoints : null);
+            DrawSpawnPointGizmos(apex != null ? apex.SpawnPoints : null);
+            DrawSpawnPointGizmos(plunderer != null && plunderer.Spawn != null ? plunderer.Spawn.spawnPoints : null);
         }
 
         private static void DrawSpawnPointGizmos(SpawnPointEntry[] spawnPoints)
@@ -771,15 +1115,15 @@ namespace WalaPaNameHehe.Multiplayer
                 return;
             }
 
-            ai.plundererSpawnPoint = plundererSpawnPoint;
-            ai.plundererWaypoints = plundererWaypoints;
-            ai.plundererPreloadHidden = plundererPreloadHidden;
-            ai.plundererSpawnIntervalMin = plundererSpawnIntervalMin;
-            ai.plundererSpawnIntervalMax = plundererSpawnIntervalMax;
-            ai.plundererWaypointLoopsMin = plundererWaypointLoopsMin;
-            ai.plundererWaypointLoopsMax = plundererWaypointLoopsMax;
+            ai.plundererSpawnPoint = plunderer != null ? plunderer.SpawnPoint : null;
+            ai.plundererWaypoints = plunderer != null ? plunderer.Waypoints : null;
+            ai.plundererPreloadHidden = plunderer != null && plunderer.PreloadHidden;
+            ai.plundererSpawnIntervalMin = plunderer != null ? plunderer.SpawnIntervalMin : 0f;
+            ai.plundererSpawnIntervalMax = plunderer != null ? plunderer.SpawnIntervalMax : 0f;
+            ai.plundererWaypointLoopsMin = plunderer != null ? plunderer.WaypointLoopsMin : 0;
+            ai.plundererWaypointLoopsMax = plunderer != null ? plunderer.WaypointLoopsMax : 0;
             ai.plundererDropSearchRadius = Mathf.Max(ai.plundererDropSearchRadius, 9999f);
-            if (plundererPreloadHidden)
+            if (plunderer != null && plunderer.PreloadHidden)
             {
                 ai.SetPlundererHidden(true);
             }
